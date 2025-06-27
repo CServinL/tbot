@@ -1,0 +1,8 @@
+# RealVisXL - Excellent photorealistic portraits
+--model "SG161222/RealVisXL_V4.0" --precision fp16 --attention-precision fp32
+
+# JuggernautXL - Great balance of realism/aesthetics
+--model "RunDiffusion/Juggernaut-XL-v9" --precision fp16 --attention-precision fp32
+
+# DreamShaperXL - Popular stylized realism
+--model "Lykon/dreamshaper-xl-1-0" --precision fp16 --attention-precision fp32
