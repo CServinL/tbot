@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "tbot"
+version = "0.1.0"
+description = "A command-line multimodal AI chat assistant for text and image generation"
+authors = ["Christian Servin <https://github.com/CServinL>"]
+license = "GPL-3.0"
+readme = "README.md"
+packages = [{include = "tbot"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+torch = "^2.7.0"
+transformers = "^4.30.0"
+diffusers = "^0.34.0"
+pillow = "^10.0.0"
+accelerate = "^0.28.0"
+safetensors = "^0.3.0"
+
+# Optional GPU acceleration
+xformers = {version = "^0.0.31", optional = true}
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.0.0"
+pytest = "^7.0.0"
+
+[tool.poetry.extras]
+gpu = ["xformers"]
+
+[tool.poetry.scripts]
+tbot = "tbot.main:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
