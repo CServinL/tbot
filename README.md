@@ -1,2 +1,4 @@
-# chatcmd
-This is a python application that implements a local, secure chat bot tailored to run on the command line.
+# TBot
+## A multimodal AI bot for your terminal.
+
+Powered by local HTTP and MCP daemons for text and image generation.
