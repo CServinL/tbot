@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 HTTP REST API server for Stable Diffusion MCP Server
+Now includes ComfyUI compatibility
 """
 
 import json
@@ -8,6 +9,85 @@ import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
+from comfyui_http_handler import ComfyUIHTTPHandler
+
+
+class StableDiffusionHTTPHandler(BaseHTTPRequestHandler, ComfyUIHTTPHandler):
+    """HTTP request handler for the Stable Diffusion server with ComfyUI compatibility"""
+
+    def __init__(self, sd_server, *args, **kwargs):
+        self.sd_server = sd_server
+        super().__init__(*args, **kwargs)
+
+    def log_message(self, format, *args):
+        """Override to use our logger"""
+        self.sd_server.logger.info(f"{self.address_string()} - {format % args}")
+
+    def do_GET(self):
+        """Handle GET requests"""
+        # Try ComfyUI routes first
+        if self.handle_comfyui_routes():
+            return
+
+        # Fall back to original endpoints
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+
+        if path == '/health':
+            self.handle_health_check()
+        elif path == '/models':
+            self.handle_list_models()
+        elif path.startswith('/images/'):
+            filename = path.split('/')[-1]
+            self.serve_image(filename)
+        else:
+            self.send_error(404, "Not Found")
+
+    def do_POST(self):
+        """Handle POST requests"""
+        # Try ComfyUI routes first
+        if self.handle_comfyui_routes():
+            return
+
+        # Fall back to original endpoints
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+
+        if path == '/generate':
+            self.handle_generate()
+        elif path == '/switch-model':
+            self.handle_switch_model()
+        elif path == '/clear-cache':
+            self.handle_clear_cache()
+        else:
+            self.send_error(404, "Not Found")
+
+    def do_OPTIONS(self):
+        """Handle OPTIONS requests for CORS"""
+        self.send_response(200)
+        self.send_cors_headers()
+        self.end_headers()
+
+    def send_cors_headers(self):
+        """Send CORS headers"""
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+
+    def handle_health_check(self):
+        """Handle health check endpoint"""
+        status = {
+            "status": "healthy" if self.sd_server.model_ready else "loading" if self.sd_server.model_loading else "starting",
+            "model_id": self.sd_server.model_id,
+            "model_type": "SDXL" if self.sd_server.is_sdxl else "SD 1.5/2.x",
+            "device": self.sd_server.device,
+            "precision": self.sd_server.precision,
+            "attention_precision": self.sd_server.attention_precision,
+            "model_ready": self.sd_server.model_ready,
+            "model_loading": self.sd_server.model_loading
+        }
+
+        self.send_json_response(200, status)
 
 class StableDiffusionHTTPHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the Stable Diffusion server"""
