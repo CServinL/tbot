@@ -10,42 +10,44 @@ import logging
 import asyncio
 import sys
 import argparse
-import time
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
 # Import the new classificator
 from conductor.classificator import PromptClassificator
 
-# Only import what we absolutely need at startup
-if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
-
 # Import dependencies loader with fallback
 try:
-    from dependencies_loader import DependenciesLoader
+    from dependencies_loader import DependenciesLoader  # type: ignore[import-not-found]
 except ImportError:
     try:
         from conductor.dependencies_loader import DependenciesLoader
     except ImportError:
-        class DependenciesLoader:
-            def __init__(self): pass
+        class DependenciesLoaderFallback:
+            def __init__(self) -> None: 
+                pass
 
-            async def ensure_dependencies(self, model_name: str, precision: str = "FP16") -> bool: return True
+            async def ensure_dependencies(self, model_name: str, precision: str = "FP16") -> bool: 
+                return True
 
-            def check_system_requirements(self) -> Dict[str, Any]: return {'platform': 'unknown', 'memory_gb': 16.0}
+            def check_system_requirements(self) -> Dict[str, Any]: 
+                return {'platform': 'unknown', 'memory_gb': 16.0}
 
-            def get_missing_packages(self, packages: List[str]) -> List[str]: return []
+            def get_missing_packages(self, packages: List[str]) -> List[str]: 
+                return []
 
-            def get_installation_instructions(self, packages: List[str]) -> Dict[str, str]: return {}
+            def get_installation_instructions(self, packages: List[str]) -> Dict[str, str]: 
+                return {}
 
             def validate_model_requirements(self, model_name: str, precision: str) -> Dict[str, Any]:
                 return {'can_load': True, 'warnings': [], 'recommendations': []}
 
-            def get_dependency_report(self) -> Dict[str, Any]: return {'system': {}, 'packages': {},
-                                                                       'recommendations': []}
+            def get_dependency_report(self) -> Dict[str, Any]: 
+                return {'system': {}, 'packages': {}, 'recommendations': []}
+
+        DependenciesLoader = DependenciesLoaderFallback
 
 # Setup logging
 logging.basicConfig(
@@ -58,14 +60,20 @@ logger = logging.getLogger(__name__)
 from conductor.utils.config_parser import ConfigParser
 from conductor.model_loader import ModelLoader
 
+def _default_dict() -> Dict[str, Any]:
+    return {}
+
+def _default_list() -> List[str]:
+    return []
+
 @dataclass
 class ModelInfo:
     technical_name: str
     max_context_window: int = 2048
     max_new_tokens: int = 1024
     description: str = ""
-    special_flags: dict[str, Any] = field(default_factory=dict)
-    stop_patterns: list[str] = field(default_factory=list)  # Allow per-model stop patterns
+    special_flags: Dict[str, Any] = field(default_factory=_default_dict)
+    stop_patterns: List[str] = field(default_factory=_default_list)
 
     # Add more fields as needed (e.g., quantization, architecture, etc.)
 
@@ -99,12 +107,13 @@ class Conductor:
         self.config_parser = ConfigParser(config_path)
         self.model_loader = ModelLoader(models_dir)
         # Ensure model_info_dir is set and absolute
-        if not hasattr(self.model_loader, "model_info_dir") or not self.model_loader.model_info_dir:
-            self.model_loader.model_info_dir = str(Path(__file__).parent / "model_info")
+        if not hasattr(self.model_loader, "model_info_dir") or not getattr(self.model_loader, "model_info_dir", None):
+            setattr(self.model_loader, "model_info_dir", str(Path(__file__).parent / "model_info"))
         else:
-            self.model_loader.model_info_dir = str(Path(self.model_loader.model_info_dir).resolve())
+            current_dir = getattr(self.model_loader, "model_info_dir")
+            setattr(self.model_loader, "model_info_dir", str(Path(current_dir).resolve()))
         # Patch: set the expected naming convention for ModelInfo files
-        self.model_loader.model_info_naming = "double_underscore_py"  # Custom flag for loader logic
+        setattr(self.model_loader, "model_info_naming", "double_underscore_py")
         self.dependencies_loader = DependenciesLoader()
         self.engines: Dict[str, BaseEngine] = {}
         self.engine_configs: Dict[str, Dict[str, Any]] = {}
@@ -115,7 +124,7 @@ class Conductor:
         self.classificator: Optional[PromptClassificator] = None
 
         # Engine class mapping
-        self.engine_classes: dict[str, type] = {
+        self.engine_classes: Dict[str, type] = {
             'conversational_chat': ConversationalChatEngine,
             'code_completion': CodeCompletionEngine,
             'code_generation': CodeGenerationEngine,
@@ -168,7 +177,7 @@ class Conductor:
             logger.info("✓ Prompt classificator initialized")
 
             # Initialize MCP server
-            self.mcp_server = MCPServer()
+            self.mcp_server = MCPServer()  # type: ignore[no-untyped-call]
             logger.info("✓ MCP server initialized")
 
             # Debug: print model_info search path and technical names
@@ -186,8 +195,8 @@ class Conductor:
                     self.model_loader.register_model_info(model_info)
                 else:
                     logger.warning(
-                        f"No ModelInfo found for {technical_name}, checked in: {self.model_loader.model_info_dir} "
-                        f"(expected: {self.model_loader.model_info_dir}/{technical_name.replace('/', '--')}.py)"
+                        f"No ModelInfo found for {technical_name}, checked in: {getattr(self.model_loader, 'model_info_dir', 'unknown')} "
+                        f"(expected: {getattr(self.model_loader, 'model_info_dir', 'unknown')}/{technical_name.replace('/', '--')}.py)"
                     )
 
             # Only load general_reasoning and image_generation on startup
@@ -259,14 +268,14 @@ class Conductor:
             await self._create_engine_for_category("image_generation", img_config)
             logger.info("✓ image_generation engine created")
 
-    async def return_to_normal_models(self, keep_models: list[str] = []):
+    async def return_to_normal_models(self, keep_models: List[str] = []) -> None:
         """
         Unload all models except general_reasoning.
         """
         keep_models = [
             self.engine_configs["general_reasoning"]["technical_model_name"]
         ] if "general_reasoning" in self.engine_configs else []
-        await self.model_loader.cleanup_unused_models(keep_models=keep_models)
+        await self.model_loader.cleanup_unused_models(keep_models=keep_models)  # type: ignore[misc]
         # Optionally reload general_reasoning if it was unloaded
         config = self.engine_configs.get("general_reasoning")
         if config and not self.model_loader.is_model_loaded(config['technical_model_name']):
@@ -360,34 +369,12 @@ class Conductor:
         logger.info(f"✓ Created engine: {category}")
 
 
-def main_sync():
+def main_sync() -> None:
     import asyncio
     asyncio.run(main())
 
 
-async def main():
-    # ...existing code for main() that sets up the CLI and calls cli_interface...
-    parser = argparse.ArgumentParser(description="Conductor LLM Server CLI")
-    parser.add_argument("--config", default="conductor/SETTINGS.md", help="Config file path")
-    parser.add_argument("--skip-model-loading", action="store_true", help="Skip loading models")
-    parser.add_argument("--log-level", choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
-                        help="Logging level")
-    args = parser.parse_args()
-
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
-
-    conductor = Conductor(args.config)
-    success = await conductor.initialize(skip_model_loading=args.skip_model_loading)
-    if not success:
-        logger.error("Failed to initialize conductor")
-        sys.exit(1)
-
-    # Import cli_interface here to avoid NameError
-    from conductor.conductor_cli import cli_interface
-    await cli_interface(conductor)
-
-
-async def main():
+async def main() -> None:
     # ...existing code for main() that sets up the CLI and calls cli_interface...
     parser = argparse.ArgumentParser(description="Conductor LLM Server CLI")
     parser.add_argument("--config", default="conductor/SETTINGS.md", help="Config file path")
