@@ -262,7 +262,7 @@ class ModelLoader:
                          quantization_config: Optional[BitsAndBytesConfig]) -> Optional[PreTrainedModel]:
         """Synchronously load model."""
         try:
-            model = AutoModelForCausalLM.from_pretrained(
+            model = AutoModelForCausalLM.from_pretrained(  # type: ignore[no-untyped-call]
                 model_name,
                 torch_dtype=torch_dtype,
                 quantization_config=quantization_config,
@@ -274,9 +274,9 @@ class ModelLoader:
 
             # Move to device if not using device_map
             if not torch.cuda.is_available() or quantization_config is None:
-                model = model.to(self.device)
+                model = model.to(self.device)  # type: ignore[attr-defined]
 
-            return model
+            return model  # type: ignore[no-any-return]
         except Exception as e:
             logger.error(f"Error loading model {model_name}: {e}")
             return None
