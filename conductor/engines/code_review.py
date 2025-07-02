@@ -1,21 +1,15 @@
-import asyncio
 import logging
 import re
-from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from typing import Dict, Any, Optional, AsyncGenerator, List
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class CodeReviewEngine(BaseLLMEngine):
-    """Engine specialized for code review, debugging, and code quality analysis."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class CodeReviewEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
 
         # Review types
         self.review_types = {
@@ -80,48 +74,7 @@ class CodeReviewEngine(BaseLLMEngine):
             'info': 'Informational notes and best practices'
         }
 
-    async def load_model(self) -> bool:
-        """Load the code review model."""
-        try:
-            logger.info(f"Loading code review model: {self.technical_model_name}")
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded code review model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load code review model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading code review model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the code review model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Code review model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading code review model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Perform code review and analysis.
 
         Args:
@@ -138,8 +91,11 @@ class CodeReviewEngine(BaseLLMEngine):
         Returns:
             str: Code review with findings and recommendations
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Code review model not loaded")
+
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model or tokenizer not available")
 
         try:
             # Parse review parameters
@@ -207,7 +163,7 @@ class CodeReviewEngine(BaseLLMEngine):
             logger.error(f"Error generating code review: {e}")
             raise
 
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming code review.
 
         Args:
@@ -217,11 +173,14 @@ class CodeReviewEngine(BaseLLMEngine):
         Yields:
             str: Code review chunks
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Code review model not loaded")
 
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model or tokenizer not available")
+
         try:
-            from transformers import TextIteratorStreamer
+            from transformers.generation.streamers import TextIteratorStreamer
             import torch
             from threading import Thread
 
@@ -287,7 +246,13 @@ class CodeReviewEngine(BaseLLMEngine):
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for code review."""
-        return self.persona_loader.get_persona_for_category('code_review')
+        if self.persona:
+            return self.persona
+        
+        # Default code review system prompt
+        return ("You are an expert code reviewer. Analyze the provided code for bugs, "
+                "security issues, performance problems, style violations, and best practices. "
+                "Provide specific, actionable feedback with clear explanations and suggestions for improvement.")
 
     def _detect_language(self, code: str) -> str:
         """Detect programming language from code."""

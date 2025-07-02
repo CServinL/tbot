@@ -1,21 +1,15 @@
-import asyncio
 import logging
 import re
-from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from typing import Dict, Any, Optional, AsyncGenerator, List
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class QuestionAnsweringEngine(BaseLLMEngine):
-    """Engine specialized for question answering tasks."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class QuestionAnsweringEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
 
         # Question types and their characteristics
         self.question_types = {
@@ -67,48 +61,7 @@ class QuestionAnsweringEngine(BaseLLMEngine):
             'step_by_step': 'Break down into sequential steps'
         }
 
-    async def load_model(self) -> bool:
-        """Load the question answering model."""
-        try:
-            logger.info(f"Loading question answering model: {self.technical_model_name}")
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded question answering model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load question answering model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading question answering model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the question answering model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Question answering model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading question answering model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Answer questions with appropriate depth and format.
 
         Args:

@@ -1,20 +1,14 @@
-import asyncio
 import logging
-from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from typing import Dict, Any, Optional, AsyncGenerator, List
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class TranslationEngine(BaseLLMEngine):
-    """Engine specialized for multilingual translation using NLLB-200."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class TranslationEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
 
         # Common language codes for NLLB-200
         self.language_codes = {
@@ -53,48 +47,7 @@ class TranslationEngine(BaseLLMEngine):
         # Reverse mapping for code to language name
         self.code_to_language = {v: k for k, v in self.language_codes.items()}
 
-    async def load_model(self) -> bool:
-        """Load the translation model."""
-        try:
-            logger.info(f"Loading translation model: {self.technical_model_name}")
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded translation model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load translation model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading translation model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the translation model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Translation model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading translation model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate translation.
 
         Args:
@@ -108,8 +61,11 @@ class TranslationEngine(BaseLLMEngine):
         Returns:
             str: Translated text
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Translation model not loaded")
+
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model or tokenizer not available")
 
         try:
             # Parse translation parameters
@@ -197,7 +153,7 @@ class TranslationEngine(BaseLLMEngine):
             logger.error(f"Error generating translation: {e}")
             raise
 
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming translation.
 
         Args:
@@ -207,11 +163,14 @@ class TranslationEngine(BaseLLMEngine):
         Yields:
             str: Translation chunks
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Translation model not loaded")
 
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model or tokenizer not available")
+
         try:
-            from transformers import TextIteratorStreamer
+            from transformers.generation.streamers import TextIteratorStreamer
             import torch
             from threading import Thread
 
@@ -281,7 +240,14 @@ class TranslationEngine(BaseLLMEngine):
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for translation."""
-        return self.persona_loader.get_persona_for_category('translation')
+        # Use the persona from BaseEngine if available
+        if self.persona:
+            return self.persona
+        
+        # Default translation system prompt
+        return ("You are a professional translator. Translate the text accurately "
+                "while preserving the meaning, tone, and style of the original. "
+                "Provide only the translation without additional explanations.")
 
     def _get_language_code(self, language: str) -> Optional[str]:
         """Get language code from language name or return if already a code.

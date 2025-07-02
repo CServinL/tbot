@@ -2,20 +2,15 @@ import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class CodeGenerationEngine(BaseLLMEngine):
-    """Engine for generating complete code solutions and implementations."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class CodeGenerationEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
         self.code_templates = {
             'python': {
                 'function': 'def {name}({params}):\n    """{docstring}"""\n    {body}',
@@ -32,49 +27,7 @@ class CodeGenerationEngine(BaseLLMEngine):
                 'method': 'public {return_type} {name}({params}) {{\n    // {docstring}\n    {body}\n}}'
             }
         }
-
-    async def load_model(self) -> bool:
-        """Load the code generation model."""
-        try:
-            logger.info(f"Loading code generation model: {self.technical_model_name}")
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded code generation model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load code generation model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading code generation model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the code generation model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Code generation model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading code generation model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate code based on requirements.
 
         Args:
@@ -89,68 +42,31 @@ class CodeGenerationEngine(BaseLLMEngine):
         Returns:
             str: Generated code
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Code generation model not loaded")
 
-        try:
-            # Parse generation requirements
-            language = kwargs.get('language', 'python')
-            style = kwargs.get('style', 'auto')
-            include_tests = kwargs.get('include_tests', False)
-            include_docs = kwargs.get('include_docs', True)
+        # Parse generation requirements
+        language = kwargs.get('language', 'python')
+        style = kwargs.get('style', 'auto')
+        include_tests = kwargs.get('include_tests', False)
+        include_docs = kwargs.get('include_docs', True)
 
-            # Build structured prompt
-            generation_prompt = self._build_code_generation_prompt(
-                prompt, language, style, include_tests, include_docs
-            )
+        # Build structured prompt
+        generation_prompt = self._build_code_generation_prompt(
+            prompt, language, style, include_tests, include_docs
+        )
 
-            # Get generation parameters
-            gen_params = self._get_code_generation_params(kwargs, language)
+        # Get generation parameters
+        gen_params = self._get_code_generation_params(kwargs, language)
 
-            # Tokenize input
-            inputs = self.tokenizer(
-                generation_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=3072  # Leave room for substantial code generation
-            )
+        # Use parent's generate method with the built prompt and parameters
+        response = await super().generate(generation_prompt, **gen_params)
 
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        # Post-process the generated code
+        processed_code = self._post_process_code(response, language, kwargs)
 
-            # Generate code
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_params['max_new_tokens'],
-                    temperature=gen_params['temperature'],
-                    do_sample=gen_params['do_sample'],
-                    top_p=gen_params['top_p'],
-                    repetition_penalty=gen_params['repetition_penalty'],
-                    pad_token_id=gen_params['pad_token_id'],
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    num_return_sequences=1
-                )
+        logger.debug(f"Generated {language} code: {len(processed_code)} chars")
+        return processed_code
 
-            # Decode and extract code
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            generated_code = self._extract_response(full_output, generation_prompt)
-
-            # Post-process the generated code
-            processed_code = self._post_process_code(generated_code, language, kwargs)
-
-            self.increment_generation_count()
-
-            logger.debug(f"Generated {language} code: {len(processed_code)} chars")
-            return processed_code
-
-        except Exception as e:
-            logger.error(f"Error generating code: {e}")
-            raise
-
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming code response.
 
         Args:
@@ -160,72 +76,29 @@ class CodeGenerationEngine(BaseLLMEngine):
         Yields:
             str: Code chunks
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Code generation model not loaded")
+        # Parse generation requirements
+        language = kwargs.get('language', 'python')
+        style = kwargs.get('style', 'auto')
+        include_tests = kwargs.get('include_tests', False)
+        include_docs = kwargs.get('include_docs', True)
 
-        try:
-            from transformers import TextIteratorStreamer
-            import torch
-            from threading import Thread
+        # Build structured prompt
+        generation_prompt = self._build_code_generation_prompt(
+            prompt, language, style, include_tests, include_docs
+        )
 
-            language = kwargs.get('language', 'python')
-            generation_prompt = self._build_code_generation_prompt(
-                prompt, language,
-                kwargs.get('style', 'auto'),
-                kwargs.get('include_tests', False),
-                kwargs.get('include_docs', True)
-            )
-
-            gen_params = self._get_code_generation_params(kwargs, language)
-
-            inputs = self.tokenizer(
-                generation_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=3072
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'repetition_penalty': gen_params['repetition_penalty'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            # Stream the response
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
-        except Exception as e:
-            logger.error(f"Error in streaming code generation: {e}")
-            yield f"# Error: {str(e)}"
+        # Get generation parameters
+        gen_params = self._get_code_generation_params(kwargs, language)
+        
+        # Use parent's generate_stream method with the built prompt and parameters
+        async for chunk in super().generate_stream(generation_prompt, **gen_params):
+            yield chunk
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for code generation."""
-        return self.persona_loader.get_persona_for_category('code_generation')
+        if hasattr(self, 'persona_loader'):
+            return self.persona_loader.get_persona_for_category('code_generation')
+        return None
 
     def _build_code_generation_prompt(self,
                                       user_request: str,

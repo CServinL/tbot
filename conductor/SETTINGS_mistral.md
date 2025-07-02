@@ -44,6 +44,7 @@ Express when something is a cultural vias and when it is a political vias.
 | **Legal Document Analysis** | Mistral 7B v0.2 | ~7GB (FP16) | `mistralai/Mistral-7B-Instruct-v0.3` | false | FP16 |
 | **Code Review/Debugging** | CodeLlama 7B Instruct | ~7GB (FP16) | `codellama/CodeLlama-7b-Instruct-hf` | false | FP16 |
 | **Long Context Tasks** | Mistral 7B v0.2 | ~12GB+ (varies with context) | `mistralai/Mistral-7B-Instruct-v0.3` | true | FP16 |
+| **Image Generation** | Diffusiond (Stable Diffusion) | External | `diffusiond` | false | N/A |
 
 ## Model Consolidation Strategy:
 - **Primary Model**: `mistralai/Mistral-7B-Instruct-v0.3` (FP16, ~7GB) handles most general tasks and stays loaded
@@ -82,3 +83,6 @@ Once you complete HuggingFace authentication:
 2. Run `huggingface-cli login`
 3. Replace model names with `meta-llama/Llama-3.1-8B-Instruct`
 4. Enjoy the improved performance of larger models
+
+## Diffusiond Settings
+url: http://127.0.0.1:8000

@@ -3,6 +3,9 @@ import asyncio
 import logging
 import time
 import gc
+import os
+import importlib.util
+from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from transformers import (
     AutoTokenizer,
@@ -12,51 +15,186 @@ from transformers import (
     PreTrainedTokenizer
 )
 import psutil
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class ModelInfo:
+    technical_name: str
+    max_context_window: int = 2048
+    max_new_tokens: int = 1024
+    description: str = ""
+    special_flags: dict = field(default_factory=dict)
+    stop_patterns: list = field(default_factory=list)
 
 class ModelLoader:
-    """Handles loading, unloading, and management of LLM models."""
+    """Enhanced model loader with better error handling and model sharing"""
 
-    def __init__(self):
+    def __init__(self, models_dir: str = "./models"):
         self.loaded_models: Dict[str, Tuple[PreTrainedModel, PreTrainedTokenizer]] = {}
-        self.model_metadata: Dict[str, Dict[str, Any]] = {}
+        self.device = None
+        self._torch = None
+        self._transformers = None
+        self.models_dir = Path(models_dir)
+        self.models_dir.mkdir(exist_ok=True)
+        self.model_infos: Dict[str, ModelInfo] = {}
+        self.max_memory_gb = self._detect_max_memory_gb()
         self.total_memory_used = 0.0
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.max_memory_gb = self._get_available_memory()
+        self.model_metadata = {}
+        logger.info(f"Model cache directory: {self.models_dir.absolute()}")
 
-        logger.info(f"ModelLoader initialized - Device: {self.device}, Available Memory: {self.max_memory_gb:.1f}GB")
+    def _detect_max_memory_gb(self):
+        """
+        Detect the maximum available GPU memory (in GB), or fallback to system RAM if CUDA is not available.
+        """
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
+        except Exception:
+            pass
+        # Fallback to system RAM
+        import psutil
+        return psutil.virtual_memory().total / 1024 ** 3
 
-    def _get_available_memory(self) -> float:
-        """Get available GPU or system memory in GB."""
-        if torch.cuda.is_available():
-            return torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+    def load_model_info_from_file(self, technical_name: str) -> ModelInfo:
+        """(Deprecated) Load model information from a JSON file. Not used in .py ModelInfo workflow."""
+        logger.warning("load_model_info_from_file is deprecated and not used.")
+        return ModelInfo(technical_name=technical_name)
+
+    def register_model_info(self, model_info: ModelInfo):
+        """Register model information.
+
+        Args:
+            model_info (ModelInfo): The model information to register.
+        """
+        self.model_infos[model_info.technical_name] = model_info
+        logger.info(f"Registered model info: {model_info.technical_name}")
+
+    def get_model_info(self, technical_name: str):
+        """
+        Load ModelInfo from a Python file using the double-dash naming convention.
+        E.g., google/flan-t5-large -> google--flan-t5-large.py
+        """
+        model_info_dir = getattr(self, "model_info_dir", None)
+        if not model_info_dir:
+            return None
+        base = technical_name.replace("/", "--")
+        path = os.path.join(model_info_dir, f"{base}.py")
+        if not os.path.isfile(path):
+            return None
+        # Dynamically import the ModelInfo from the .py file
+        spec = importlib.util.spec_from_file_location(f"model_info_{base}", path)
+        if not spec or not spec.loader:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            return None
+        # The ModelInfo instance must be named 'model_info' in the .py file
+        return getattr(module, "model_info", None)
+
+    def lazy_import_torch(self):
+        if self._torch is None:
+            try:
+                import torch
+                self._torch = torch
+                logger.info("Torch module imported")
+            except ImportError:
+                logger.error("Torch module not found")
+                self._torch = None
+        return self._torch
+
+    def _lazy_import_transformers(self):
+        """Lazy import of transformers module."""
+        if self._transformers is None:
+            try:
+                from transformers import (
+                    AutoTokenizer,
+                    AutoModelForCausalLM,
+                    BitsAndBytesConfig,
+                    PreTrainedModel,
+                    PreTrainedTokenizer
+                )
+                self._transformers = (AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, PreTrainedModel, PreTrainedTokenizer)
+                logger.info("Transformers module imported")
+            except ImportError:
+                logger.error("Transformers module not found")
+                raise
+
+    def _get_local_model_path(self, model_name: str) -> Optional[Path]:
+        """Get the local file path of a model.
+
+        Args:
+            model_name (str): The name of the model.
+
+        Returns:
+            Optional[Path]: The file path of the model, or None if not found.
+        """
+        model_path = self.models_dir / model_name
+        if model_path.exists():
+            return model_path
         else:
-            return psutil.virtual_memory().total / (1024 ** 3)
+            return None
 
-    def _get_current_memory_usage(self) -> float:
-        """Get current memory usage in GB."""
-        if torch.cuda.is_available():
-            return torch.cuda.memory_allocated() / (1024 ** 3)
-        else:
-            return psutil.virtual_memory().used / (1024 ** 3)
+    def _get_hf_token(self) -> Optional[str]:
+        """Get Hugging Face token from environment or cache.
 
-    async def load_model(self,
-                         model_name: str,
-                         precision: str = "FP16",
-                         force_reload: bool = False) -> Tuple[Optional[PreTrainedModel], Optional[PreTrainedTokenizer]]:
+        Returns:
+            Optional[str]: The Hugging Face token, or None if not available.
+        """
+        return os.getenv("HF_TOKEN")
+
+    def _load_tokenizer(self, model_name: str) -> Optional['PreTrainedTokenizer']:
+        """Load tokenizer for a model.
+
+        Args:
+            model_name (str): The name of the model.
+
+        Returns:
+            Optional[PreTrainedTokenizer]: The loaded tokenizer, or None if failed.
+        """
+        self._lazy_import_transformers()
+        from transformers import AutoTokenizer
+
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                use_fast=True
+            )
+
+            # Ensure pad token is set
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            return tokenizer
+        except Exception as e:
+            logger.error(f"Error loading tokenizer for {model_name}: {e}")
+            return None
+
+    def _handle_tokenizer_error(self, error: Exception, model_name: str):
+        """Handle errors that occur during tokenizer loading.
+
+        Args:
+            error (Exception): The exception that was raised.
+            model_name (str): The name of the model.
+        """
+        logger.error(f"Error loading tokenizer for {model_name}: {error}")
+
+    async def load_model(self, model_name: str, precision: str = "FP16") -> Tuple[Optional[PreTrainedModel], Optional[PreTrainedTokenizer]]:
         """Load model with specified precision.
 
         Args:
             model_name: HuggingFace model identifier
             precision: Model precision (FP16, FP32, 4-bit)
-            force_reload: Force reload even if already loaded
 
         Returns:
             Tuple of (model, tokenizer) or (None, None) if failed
         """
-        if model_name in self.loaded_models and not force_reload:
+        if model_name in self.loaded_models:
             logger.info(f"Model {model_name} already loaded, returning cached version")
             return self.loaded_models[model_name]
 
@@ -118,24 +256,6 @@ class ModelLoader:
             logger.error(f"Failed to load {model_name}: {str(e)}")
             return None, None
 
-    def _load_tokenizer(self, model_name: str) -> Optional[PreTrainedTokenizer]:
-        """Synchronously load tokenizer."""
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                trust_remote_code=True,
-                use_fast=True
-            )
-
-            # Ensure pad token is set
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            return tokenizer
-        except Exception as e:
-            logger.error(f"Error loading tokenizer for {model_name}: {e}")
-            return None
-
     def _load_model_sync(self,
                          model_name: str,
                          torch_dtype: torch.dtype,
@@ -161,7 +281,7 @@ class ModelLoader:
             logger.error(f"Error loading model {model_name}: {e}")
             return None
 
-    async def unload_model(self, model_name: str) -> bool:
+    def unload_model(self, model_name: str) -> bool:
         """Unload model from memory.
 
         Args:
@@ -205,6 +325,57 @@ class ModelLoader:
         except Exception as e:
             logger.error(f"Error unloading model {model_name}: {e}")
             return False
+
+    def is_model_loaded(self, model_name: str) -> bool:
+        """Check if specific model is loaded."""
+        return model_name in self.loaded_models
+
+    def get_loaded_model_info(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about all loaded models."""
+        return {
+            model_name: {
+                **metadata,
+                'is_loaded': True
+            }
+            for model_name, metadata in self.model_metadata.items()
+        }
+
+    def get_memory_status(self) -> Dict[str, Any]:
+        """Get current memory status."""
+        current_usage = self._get_current_memory_usage()
+        return {
+            'total_memory_gb': self.max_memory_gb,
+            'used_memory_gb': current_usage,
+            'available_memory_gb': self.max_memory_gb - current_usage,
+            'tracked_model_memory_gb': self.total_memory_used,
+            'loaded_model_count': len(self.loaded_models),
+            'device': self.device
+        }
+
+    async def cleanup_unused_models(self, keep_models: list = None) -> int:
+        """Cleanup models not in keep list.
+
+        Args:
+            keep_models: List of model names to keep loaded
+
+        Returns:
+            int: Number of models unloaded
+        """
+        if keep_models is None:
+            keep_models = []
+
+        models_to_unload = [
+            name for name in self.loaded_models.keys()
+            if name not in keep_models
+        ]
+
+        unloaded_count = 0
+        for model_name in models_to_unload:
+            if await self.unload_model(model_name):
+                unloaded_count += 1
+
+        logger.info(f"Cleanup complete: unloaded {unloaded_count} models")
+        return unloaded_count
 
     def _get_torch_dtype(self, precision: str) -> torch.dtype:
         """Get torch dtype for precision."""
@@ -331,3 +502,19 @@ class ModelLoader:
     def is_model_loaded(self, model_name: str) -> bool:
         """Check if specific model is loaded."""
         return model_name in self.loaded_models
+
+    def _get_current_memory_usage(self):
+        """
+        Return the current GPU memory usage in GB.
+        If CUDA is not available, returns 0.0.
+        """
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return torch.cuda.memory_allocated() / 1024 ** 3  # in GB
+        except Exception:
+            pass
+        return 0.0
+
+    # Optionally, keep the public alias for compatibility:
+    get_current_memory_usage = _get_current_memory_usage

@@ -5,17 +5,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class BaseLLMEngine(ABC):
-    """Abstract base class for all LLM engines in the conductor system."""
-
-    def __init__(self, config: Dict[str, Any]):
+class BaseLLMEngine:
+    def __init__(self, config, model_loader, persona=None):
+        self.config = config
+        self.model_loader = model_loader
+        self.persona = persona
         self.category = config.get('category', 'unknown')
         self.model_name = config.get('model_name', '')
         self.technical_model_name = config.get('technical_model_name', '')
         self.precision = config.get('precision', 'FP16')
         self.stay_loaded = config.get('stay_loaded', False)
         self.vram_requirement = config.get('vram_requirement', '')
-        self.persona = config.get('persona', None)
         self.model = None
         self.tokenizer = None
         self.is_model_loaded = False

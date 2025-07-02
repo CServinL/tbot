@@ -5,11 +5,12 @@ Main Stable Diffusion MCP Server implementation
 
 import logging
 import os
+import time
 from pathlib import Path
 from threading import Thread
 
 from dependencies import torch
-from model_loader import ModelLoader
+from diffusiond.model_loader import ModelLoader
 from image_generator import ImageGenerator
 from http_server import HTTPServerManager
 
@@ -25,7 +26,9 @@ class StableDiffusionServer:
                  precision: str = "fp16",
                  attention_precision: str = "fp16",
                  http_host: str = "127.0.0.1",
-                 http_port: int = 8000):
+                 http_port: int = 8000,
+                 load_on_startup: bool = False  # <-- new argument
+                 ):
 
         self.model_id = model_id
         self.device = self._get_device(device)
@@ -62,6 +65,7 @@ class StableDiffusionServer:
 
         self.http_host = http_host
         self.http_port = http_port
+        self.load_on_startup = load_on_startup
 
         # Initialize components
         self.pipeline = None
@@ -86,11 +90,14 @@ class StableDiffusionServer:
         print(f"🌐 HTTP server: {self.http_host}:{self.http_port}")
 
         # Check if model is already cached
-        if self.model_loader.is_model_cached(self.model_id):
-            print("✅ Model found in local cache - startup will be faster!")
+        if hasattr(self.model_loader, "is_model_cached") and callable(getattr(self.model_loader, "is_model_cached")):
+            if self.model_loader.is_model_cached(self.model_id):
+                print("✅ Model found in local cache - startup will be faster!")
+            else:
+                cache_size = "~12-15GB" if self.is_sdxl else "~5-7GB"
+                print(f"⏳ Model not cached - first run will download {cache_size}")
         else:
-            cache_size = "~12-15GB" if self.is_sdxl else "~5-7GB"
-            print(f"⏳ Model not cached - first run will download {cache_size}")
+            print("ℹ️ Model cache check not available in this ModelLoader implementation.")
 
     def _get_device(self, device: str) -> str:
         """Determine the best device to use"""
@@ -175,7 +182,7 @@ class StableDiffusionServer:
 
     def _initialize_components(self):
         """Initialize server components"""
-        # Initialize model loader
+        # Use ModelLoader from diffusiond, pass all required arguments
         self.model_loader = ModelLoader(
             cache_dir=self.cache_dir,
             device=self.device,
@@ -184,7 +191,6 @@ class StableDiffusionServer:
             logger=self.logger
         )
 
-        # Initialize HTTP server manager
         self.http_server_manager = HTTPServerManager(
             sd_server=self,
             host=self.http_host,
@@ -199,10 +205,10 @@ class StableDiffusionServer:
         self.model_loading = True
 
         try:
-            # Load the model using the model loader
-            self.pipeline = self.model_loader.load_model(self.model_id)
+            # Always use the ModelLoader interface
+            pipeline = self.model_loader.ensure_model_loaded(self.model_id)
+            self.pipeline = pipeline
 
-            # Initialize image generator with the loaded pipeline
             self.image_generator = ImageGenerator(
                 pipeline=self.pipeline,
                 device=self.device,
@@ -220,15 +226,52 @@ class StableDiffusionServer:
         finally:
             self.model_loading = False
 
+    def run(self):
+        """Start the HTTP server and model loading"""
+        # Only load model at startup if requested
+        if self.load_on_startup:
+            Thread(target=self.load_model, daemon=True).start()
+            print("⏳ Server starting... (model loading in background)")
+        else:
+            print("⏳ Server starting... (model will be loaded on first image generation request)")
+        print()
+        # Start HTTP server (this will block)
+        self.http_server_manager.start_server()
+
     def generate_image(self, prompt: str, **kwargs):
         """Generate an image using the loaded model"""
-        if not self.model_ready:
+        # Lazy load: load model if not ready
+        wait_start = time.time()
+        max_wait = 300  # 5 minutes in seconds
+        while not self.model_ready:
             if not self.model_loading:
-                # Start loading in background
                 Thread(target=self.load_model, daemon=True).start()
-            raise RuntimeError("Model not ready. Please wait for model loading to complete.")
+            if time.time() - wait_start > max_wait:
+                return {
+                    "error": "Model loading timed out. Try again later.",
+                    "status": "timeout"
+                }
+            time.sleep(0.2)
 
-        return self.image_generator.generate_image(prompt, **kwargs)
+        result = self.image_generator.generate_image(prompt, **kwargs)
+
+        # If not load_on_startup, offload model after generation
+        if not self.load_on_startup:
+            self._offload_model()
+
+        return result
+
+    def _offload_model(self):
+        """Offload/unload the model to free memory (used in lazy mode)"""
+        self.model_loader.offload_model()
+        self.pipeline = None
+        self.image_generator = None
+        self.model_ready = False
+        import gc
+        gc.collect()
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+            print("🧹 GPU cache cleared")
 
     def get_available_models(self):
         """Get list of cached models and popular models"""
@@ -366,14 +409,3 @@ class StableDiffusionServer:
             "model_ready": False,
             "note": "Use /switch-model to reload the current model with fresh files"
         }
-
-    def run(self):
-        """Start the HTTP server and model loading"""
-        # Start model loading in background
-        Thread(target=self.load_model, daemon=True).start()
-
-        print("⏳ Server starting... (model loading in background)")
-        print()
-
-        # Start HTTP server (this will block)
-        self.http_server_manager.start_server()

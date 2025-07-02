@@ -2,20 +2,15 @@ import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class LegalAnalysisEngine(BaseLLMEngine):
-    """Engine specialized for legal document analysis and legal research."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class LegalAnalysisEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
 
         # Legal practice areas
         self.legal_areas = {
@@ -61,58 +56,7 @@ class LegalAnalysisEngine(BaseLLMEngine):
             'redlining': 'Suggest revisions and improvements'
         }
 
-    async def load_model(self) -> bool:
-        """Load the legal analysis model (typically larger model for complex analysis)."""
-        try:
-            logger.info(f"Loading legal analysis model: {self.technical_model_name}")
-
-            # Ensure dependencies for legal analysis
-            from dependencies_loader import DependenciesLoader
-            deps_loader = DependenciesLoader()
-            await deps_loader.ensure_dependencies(
-                self.technical_model_name,
-                self.precision,
-                features=['optimizations']  # May need optimizations for large model
-            )
-
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded legal analysis model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load legal analysis model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading legal analysis model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the legal analysis model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Legal analysis model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading legal analysis model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate legal analysis.
 
         Args:
@@ -164,7 +108,7 @@ class LegalAnalysisEngine(BaseLLMEngine):
                 inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
             # Generate legal analysis
-            import torch
+            torch = self.model_loader._lazy_import_torch()
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,

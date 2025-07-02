@@ -6,11 +6,11 @@ from typing import Dict, Any, List, Optional, AsyncGenerator
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from utils.config_parser import ConfigParser
-from utils.model_registry import ModelRegistry, ModelStatus
-from utils.persona_loader import PersonaLoader
-from model_loader import ModelLoader
-from dependencies_loader import DependenciesLoader
+from conductor.utils.config_parser import ConfigParser
+from conductor.utils.model_registry import ModelRegistry, ModelStatus
+from conductor.utils.persona_loader import PersonaLoader
+from conductor.model_loader import ModelLoader
+from conductor.dependencies_loader import DependenciesLoader
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class ToolInfo:
     inputSchema: Dict[str, Any]
 
 
-class ConductorMCPServer:
+class MCPServer:
     """Model Context Protocol server for Conductor LLM system."""
 
     def __init__(self):
@@ -786,15 +786,15 @@ class ConductorMCPServer:
 
 
 # Standalone function to create MCP server
-def create_mcp_server() -> ConductorMCPServer:
+def create_mcp_server() -> MCPServer:
     """Create MCP server instance."""
-    return ConductorMCPServer()
+    return MCPServer()
 
 
 if __name__ == "__main__":
     # Example usage
     async def main():
-        server = ConductorMCPServer()
+        server = MCPServer()
         await server.initialize()
 
         # Example request
@@ -815,3 +815,5 @@ if __name__ == "__main__":
 
 
     asyncio.run(main())
+
+MCPServer = MCPServer

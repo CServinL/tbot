@@ -29,39 +29,50 @@ Express when something is a cultural vias and when it is a political vias.
 **[Unverified]** This table reflects patterns observed as of January 2025. Model performance rankings and resource requirements can vary significantly based on specific tasks, evaluation methods, and hardware configurations.
 
 | Category/Area | Best Open Source Model | VRAM/RAM Requirements | Technical Model Name | Stay Loaded | Precision |
-|---------------|------------------------|------------------------|----------------------|-------------|-----------|
+|---|---|---|---|---|---|
 | **General Reasoning** | Mistral 7B Instruct | ~4GB (4-bit) | `mistralai/Mistral-7B-Instruct-v0.1` | true | 4-bit |
-| **Code Generation** | Phi-2 | ~1.5GB (4-bit) | `microsoft/phi-2` | true | 4-bit |
+| **Code Generation** | Phi-2 | ~1.5GB (4-bit) | `microsoft/phi-2` | false | 4-bit |
 | **Code Completion** | CodeLlama 7B | ~4GB (4-bit) | `codellama/CodeLlama-7b-hf` | false | 4-bit |
-| **Mathematical Reasoning** | Qwen 1.5 1.8B | ~2GB (4-bit) | `Qwen/Qwen1.5-1.8B-Chat` | true | 4-bit |
+| **Mathematical Reasoning** | Qwen 1.5 1.8B | ~2GB (4-bit) | `Qwen/Qwen1.5-1.8B-Chat` | false | 4-bit |
 | **Creative Writing** | Gemma 2B It | ~2.5GB (4-bit) | `google/gemma-2b-it` | false | 4-bit |
 | **Conversational Chat** | OpenChat 3.5 7B | ~4GB (4-bit) | `openchat/openchat-3.5-1210` | true | 4-bit |
-| **Instruction Following** | Phi-2 | ~1.5GB (4-bit) | `microsoft/phi-2` | true | 4-bit |
+| **Instruction Following** | Phi-2 | ~1.5GB (4-bit) | `microsoft/phi-2` | false | 4-bit |
 | **Translation** | NLLB-200 1.3B | ~3GB (FP16) | `facebook/nllb-200-distilled-1.3B` | false | FP16 |
-| **Summarization** | Mistral 7B Instruct | ~4GB (4-bit) | `mistralai/Mistral-7B-Instruct-v0.1` | true | 4-bit |
-| **Question Answering** | Qwen 1.5 1.8B | ~2GB (4-bit) | `Qwen/Qwen1.5-1.8B-Chat` | true | 4-bit |
+| **Summarization** | Mistral 7B Instruct | ~4GB (4-bit) | `mistralai/Mistral-7B-Instruct-v0.1` | false | 4-bit |
+| **Question Answering** | Qwen 1.5 1.8B | ~2GB (4-bit) | `Qwen/Qwen1.5-1.8B-Chat` | false | 4-bit |
 | **Scientific/Research** | LLaMA 3.1 70B | ~35GB (4-bit) | `meta-llama/Llama-3.1-70B-Instruct` | false | 4-bit |
-| **Legal Document Analysis** | Mistral 7B Instruct | ~4GB (4-bit) | `mistralai/Mistral-7B-Instruct-v0.1` | true | 4-bit |
-| **Code Review/Debugging** | Phi-2 | ~1.5GB (4-bit) | `microsoft/phi-2` | true | 4-bit |
+| **Legal Document Analysis** | Mistral 7B Instruct | ~4GB (4-bit) | `mistralai/Mistral-7B-Instruct-v0.1` | false | 4-bit |
+| **Code Review/Debugging** | Phi-2 | ~1.5GB (4-bit) | `microsoft/phi-2` | false | 4-bit |
 | **Long Context Tasks** | Yi 1.5 6B 32k | ~6GB (4-bit) | `01-ai/Yi-1.5-6B-Chat` | false | 4-bit |
-
-## Model Consolidation Strategy:
-- **Primary Model**: `meta-llama/Llama-3.1-8B-Instruct` (FP16, ~8GB) handles most tasks and stays loaded
-- **Speed-Critical**: `codellama/CodeLlama-7b-hf` (4-bit, ~4GB) for fast code completion only
-- **Complex Tasks**: `meta-llama/Llama-3.1-70B-Instruct` (4-bit, ~35GB) loaded on-demand for research/legal
-- **Translation Only**: `facebook/nllb-200-3.3B` (FP16, ~7GB) loaded on-demand
+| **Image Generation** | Diffusiond (Stable Diffusion) | External | `diffusiond` | false | N/A |
 
 ## Precision Logic:
 - **FP16**: Balanced quality/resource usage for normal tasks requiring good accuracy
 - **4-bit**: Used only when speed is critical (code completion) or when larger models are needed but RAM is limited (70B models)
 
 ## Total Memory Footprint (Stay Loaded):
-- Llama 3.1 8B (FP16): ~8GB
-- CodeLlama 7B (4-bit): ~4GB
-- **Total persistent load**: ~12GB
+
+- **Actual loaded models (from your config):**
+    - Mistral 7B Instruct (4-bit): ~4GB
+    - OpenChat 3.5 7B (4-bit): ~4GB
+
+- **Estimated total persistent load:** ~8GB  
+  *(Sum of all "Stay Loaded" models, but actual RAM/VRAM usage may be higher due to framework overhead, caching, and fragmentation. Monitor `/status` for real usage.)*
 
 ## Important Notes:
 - [Unverified] Resource requirements are estimates and can vary based on batch size, sequence length, and specific implementation
+- Actual memory usage may be higher than the sum of model sizes due to framework overhead, CUDA context, caching, and fragmentation.
 - Performance "best" claims are subjective and task-dependent
 - Quantization trades some quality for dramatically reduced resource requirements
 - Many specialized models are general models with domain-specific fine-tuning rather than fundamentally different architectures
+
+## Diffusiond Settings
+url: http://127.0.0.1:8000
+- [Unverified] Resource requirements are estimates and can vary based on batch size, sequence length, and specific implementation
+- Actual memory usage may be higher than the sum of model sizes due to framework overhead, CUDA context, caching, and fragmentation.
+- Performance "best" claims are subjective and task-dependent
+- Quantization trades some quality for dramatically reduced resource requirements
+- Many specialized models are general models with domain-specific fine-tuning rather than fundamentally different architectures
+
+## Diffusiond Settings
+url: http://127.0.0.1:8000

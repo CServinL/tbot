@@ -34,6 +34,8 @@ def main():
                         help="HTTP server host")
     parser.add_argument("--http-port", type=int, default=8000,
                         help="HTTP server port")
+    parser.add_argument("--load-on-startup", action="store_true",
+                        help="If set, load the model at startup and keep it loaded (default: lazy loading)")
 
     args = parser.parse_args()
 
@@ -46,7 +48,8 @@ def main():
         precision=args.precision,
         attention_precision=args.attention_precision,
         http_host=args.http_host,
-        http_port=args.http_port
+        http_port=args.http_port,
+        load_on_startup=args.load_on_startup
     )
 
     server.run()

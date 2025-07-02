@@ -2,20 +2,15 @@ import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class LongContextEngine(BaseLLMEngine):
-    """Engine specialized for handling long context tasks and document processing."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class LongContextEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
 
         # Context processing strategies
         self.context_strategies = {
@@ -63,48 +58,7 @@ class LongContextEngine(BaseLLMEngine):
             'summary_compression_ratio': 0.3
         }
 
-    async def load_model(self) -> bool:
-        """Load the long context model."""
-        try:
-            logger.info(f"Loading long context model: {self.technical_model_name}")
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded long context model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load long context model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading long context model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the long context model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Long context model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading long context model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Process long context and generate response.
 
         Args:
@@ -165,7 +119,7 @@ class LongContextEngine(BaseLLMEngine):
             logger.error(f"Error processing long context: {e}")
             raise
 
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming response for long context.
 
         Args:
@@ -200,7 +154,9 @@ class LongContextEngine(BaseLLMEngine):
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for long context processing."""
-        return self.persona_loader.get_persona_for_category('long_context')
+        if hasattr(self, 'persona_loader'):
+            return self.persona_loader.get_persona_for_category('long_context')
+        return None
 
     def _analyze_long_context(self, text: str) -> Dict[str, Any]:
         """Analyze long context to determine processing approach.
@@ -710,7 +666,7 @@ class LongContextEngine(BaseLLMEngine):
             inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
 
         # Generate response
-        import torch
+        torch = self.model_loader._lazy_import_torch()
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,

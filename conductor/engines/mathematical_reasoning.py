@@ -2,20 +2,15 @@ import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class MathematicalReasoningEngine(BaseLLMEngine):
-    """Engine specialized for mathematical problem solving and reasoning."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class MathematicalReasoningEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
         self.math_contexts = {
             'algebra': 'algebraic equations and expressions',
             'calculus': 'differentiation, integration, and limits',
@@ -27,48 +22,7 @@ class MathematicalReasoningEngine(BaseLLMEngine):
             'optimization': 'optimization problems and mathematical programming'
         }
 
-    async def load_model(self) -> bool:
-        """Load the mathematical reasoning model."""
-        try:
-            logger.info(f"Loading mathematical reasoning model: {self.technical_model_name}")
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded mathematical reasoning model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load mathematical reasoning model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading mathematical reasoning model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the mathematical reasoning model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Mathematical reasoning model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading mathematical reasoning model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate mathematical solution and reasoning.
 
         Args:
@@ -82,69 +36,32 @@ class MathematicalReasoningEngine(BaseLLMEngine):
         Returns:
             str: Mathematical solution with reasoning
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Mathematical reasoning model not loaded")
+        # Parse mathematical context
+        math_context = kwargs.get('math_context', 'general')
+        show_work = kwargs.get('show_work', True)
+        verify_answer = kwargs.get('verify_answer', True)
+        use_latex = kwargs.get('use_latex', False)
 
-        try:
-            # Parse mathematical context
-            math_context = kwargs.get('math_context', 'general')
-            show_work = kwargs.get('show_work', True)
-            verify_answer = kwargs.get('verify_answer', True)
-            use_latex = kwargs.get('use_latex', False)
+        # Build mathematical prompt
+        math_prompt = self._build_math_prompt(
+            prompt, math_context, show_work, verify_answer, use_latex
+        )
 
-            # Build mathematical prompt
-            math_prompt = self._build_math_prompt(
-                prompt, math_context, show_work, verify_answer, use_latex
-            )
+        # Get generation parameters
+        gen_params = self._get_math_generation_params(kwargs)
 
-            # Get generation parameters
-            gen_params = self._get_math_generation_params(kwargs)
+        # Use parent's generate method with the built prompt and parameters
+        response = await super().generate(math_prompt, **gen_params)
 
-            # Tokenize input
-            inputs = self.tokenizer(
-                math_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=2048
-            )
+        # Post-process mathematical content
+        processed_solution = self._post_process_math_solution(
+            response, use_latex, kwargs
+        )
 
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        logger.debug(f"Generated mathematical solution: {len(processed_solution)} chars")
+        return processed_solution
 
-            # Generate solution
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_params['max_new_tokens'],
-                    temperature=gen_params['temperature'],
-                    do_sample=gen_params['do_sample'],
-                    top_p=gen_params['top_p'],
-                    repetition_penalty=gen_params['repetition_penalty'],
-                    pad_token_id=gen_params['pad_token_id'],
-                    eos_token_id=self.tokenizer.eos_token_id
-                )
-
-            # Decode and process solution
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            math_solution = self._extract_response(full_output, math_prompt)
-
-            # Post-process mathematical content
-            processed_solution = self._post_process_math_solution(
-                math_solution, use_latex, kwargs
-            )
-
-            self.increment_generation_count()
-
-            logger.debug(f"Generated mathematical solution: {len(processed_solution)} chars")
-            return processed_solution
-
-        except Exception as e:
-            logger.error(f"Error generating mathematical solution: {e}")
-            raise
-
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming mathematical solution.
 
         Args:
@@ -154,71 +71,29 @@ class MathematicalReasoningEngine(BaseLLMEngine):
         Yields:
             str: Solution chunks
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Mathematical reasoning model not loaded")
+        # Parse mathematical context
+        math_context = kwargs.get('math_context', 'general')
+        show_work = kwargs.get('show_work', True)
+        verify_answer = kwargs.get('verify_answer', True)
+        use_latex = kwargs.get('use_latex', False)
 
-        try:
-            from transformers import TextIteratorStreamer
-            import torch
-            from threading import Thread
+        # Build mathematical prompt
+        math_prompt = self._build_math_prompt(
+            prompt, math_context, show_work, verify_answer, use_latex
+        )
 
-            math_context = kwargs.get('math_context', 'general')
-            math_prompt = self._build_math_prompt(
-                prompt, math_context,
-                kwargs.get('show_work', True),
-                kwargs.get('verify_answer', True),
-                kwargs.get('use_latex', False)
-            )
-
-            gen_params = self._get_math_generation_params(kwargs)
-
-            inputs = self.tokenizer(
-                math_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=2048
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'repetition_penalty': gen_params['repetition_penalty'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
-        except Exception as e:
-            logger.error(f"Error in streaming math generation: {e}")
-            yield f"Error: {str(e)}"
+        # Get generation parameters
+        gen_params = self._get_math_generation_params(kwargs)
+        
+        # Use parent's generate_stream method with the built prompt and parameters
+        async for chunk in super().generate_stream(math_prompt, **gen_params):
+            yield chunk
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for mathematical reasoning."""
-        return self.persona_loader.get_persona_for_category('mathematical_reasoning')
+        if hasattr(self, 'persona_loader'):
+            return self.persona_loader.get_persona_for_category('mathematical_reasoning')
+        return None
 
     def _build_math_prompt(self,
                            problem: str,
@@ -286,7 +161,7 @@ class MathematicalReasoningEngine(BaseLLMEngine):
         """
         # Parameters optimized for mathematical reasoning
         params = {
-            'max_new_tokens': kwargs.get('max_tokens', 512),
+            'max_new_tokens': kwargs.get('max_tokens', 1024),  # Increased default
             'temperature': 0.4,  # Moderate temperature for creative problem-solving
             'do_sample': True,
             'top_p': 0.85,
@@ -296,11 +171,13 @@ class MathematicalReasoningEngine(BaseLLMEngine):
 
         # Adjust based on problem complexity
         if 'complex' in kwargs.get('math_context', '').lower():
-            params['max_new_tokens'] = min(1024, params['max_new_tokens'] * 2)
+            params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 2)
 
         # Override with user parameters
         if 'temperature' in kwargs:
             params['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
+        if 'max_tokens' in kwargs:
+            params['max_new_tokens'] = min(2048, kwargs['max_tokens'])  # Allow up to 2048
 
         return params
 

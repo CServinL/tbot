@@ -1,21 +1,15 @@
-import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, AsyncGenerator, List, Union
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class InstructionFollowingEngine(BaseLLMEngine):
-    """Engine specialized for following complex instructions and task execution."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class InstructionFollowingEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
 
         # Instruction types and patterns
         self.instruction_types = {
@@ -41,48 +35,7 @@ class InstructionFollowingEngine(BaseLLMEngine):
             'explanation_request': r'explain|clarify|describe|elaborate'
         }
 
-    async def load_model(self) -> bool:
-        """Load the instruction following model."""
-        try:
-            logger.info(f"Loading instruction following model: {self.technical_model_name}")
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded instruction following model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load instruction following model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading instruction following model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the instruction following model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Instruction following model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading instruction following model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Follow instructions and generate appropriate response.
 
         Args:
@@ -97,74 +50,37 @@ class InstructionFollowingEngine(BaseLLMEngine):
         Returns:
             str: Response following the instructions
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Instruction following model not loaded")
+        # Parse instruction parameters
+        instruction_type = kwargs.get('instruction_type', 'task_completion')
+        context = kwargs.get('context')
+        format_requirements = kwargs.get('format_requirements')
+        examples = kwargs.get('examples', [])
+        constraints = kwargs.get('constraints', [])
 
-        try:
-            # Parse instruction parameters
-            instruction_type = kwargs.get('instruction_type', 'task_completion')
-            context = kwargs.get('context')
-            format_requirements = kwargs.get('format_requirements')
-            examples = kwargs.get('examples', [])
-            constraints = kwargs.get('constraints', [])
+        # Analyze the instruction
+        instruction_analysis = self._analyze_instruction(prompt)
 
-            # Analyze the instruction
-            instruction_analysis = self._analyze_instruction(prompt)
+        # Build instruction-following prompt
+        instruction_prompt = self._build_instruction_prompt(
+            prompt, instruction_type, context, format_requirements,
+            examples, constraints, instruction_analysis
+        )
 
-            # Build instruction-following prompt
-            instruction_prompt = self._build_instruction_prompt(
-                prompt, instruction_type, context, format_requirements,
-                examples, constraints, instruction_analysis
-            )
+        # Get generation parameters
+        gen_params = self._get_instruction_params(kwargs, instruction_analysis)
+        
+        # Use parent's generate method with the built prompt and parameters
+        response = await super().generate(instruction_prompt, **gen_params)
 
-            # Get generation parameters
-            gen_params = self._get_instruction_params(kwargs, instruction_analysis)
+        # Post-process based on instruction requirements
+        processed_response = self._post_process_instruction_response(
+            response, instruction_analysis, kwargs
+        )
 
-            # Tokenize input
-            inputs = self.tokenizer(
-                instruction_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=3072  # Allow for complex instructions
-            )
+        logger.debug(f"Followed instruction: {len(processed_response)} chars")
+        return processed_response
 
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            # Generate response
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_params['max_new_tokens'],
-                    temperature=gen_params['temperature'],
-                    do_sample=gen_params['do_sample'],
-                    top_p=gen_params['top_p'],
-                    repetition_penalty=gen_params['repetition_penalty'],
-                    pad_token_id=gen_params['pad_token_id'],
-                    eos_token_id=self.tokenizer.eos_token_id
-                )
-
-            # Decode and process response
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            instruction_response = self._extract_response(full_output, instruction_prompt)
-
-            # Post-process based on instruction requirements
-            processed_response = self._post_process_instruction_response(
-                instruction_response, instruction_analysis, kwargs
-            )
-
-            self.increment_generation_count()
-
-            logger.debug(f"Followed instruction: {len(processed_response)} chars")
-            return processed_response
-
-        except Exception as e:
-            logger.error(f"Error following instruction: {e}")
-            raise
-
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming instruction response.
 
         Args:
@@ -174,74 +90,34 @@ class InstructionFollowingEngine(BaseLLMEngine):
         Yields:
             str: Response chunks
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Instruction following model not loaded")
+        # Parse instruction parameters
+        instruction_type = kwargs.get('instruction_type', 'task_completion')
+        context = kwargs.get('context')
+        format_requirements = kwargs.get('format_requirements')
+        examples = kwargs.get('examples', [])
+        constraints = kwargs.get('constraints', [])
 
-        try:
-            from transformers import TextIteratorStreamer
-            import torch
-            from threading import Thread
+        # Analyze the instruction
+        instruction_analysis = self._analyze_instruction(prompt)
 
-            instruction_analysis = self._analyze_instruction(prompt)
-            instruction_prompt = self._build_instruction_prompt(
-                prompt,
-                kwargs.get('instruction_type', 'task_completion'),
-                kwargs.get('context'),
-                kwargs.get('format_requirements'),
-                kwargs.get('examples', []),
-                kwargs.get('constraints', []),
-                instruction_analysis
-            )
+        # Build instruction-following prompt
+        instruction_prompt = self._build_instruction_prompt(
+            prompt, instruction_type, context, format_requirements,
+            examples, constraints, instruction_analysis
+        )
 
-            gen_params = self._get_instruction_params(kwargs, instruction_analysis)
-
-            inputs = self.tokenizer(
-                instruction_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=3072
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'repetition_penalty': gen_params['repetition_penalty'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
-        except Exception as e:
-            logger.error(f"Error in streaming instruction following: {e}")
-            yield f"Error: {str(e)}"
+        # Get generation parameters
+        gen_params = self._get_instruction_params(kwargs, instruction_analysis)
+        
+        # Use parent's generate_stream method with the built prompt and parameters
+        async for chunk in super().generate_stream(instruction_prompt, **gen_params):
+            yield chunk
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for instruction following."""
-        return self.persona_loader.get_persona_for_category('instruction_following')
+        if hasattr(self, 'persona_loader'):
+            return self.persona_loader.get_persona_for_category('instruction_following')
+        return None
 
     def _analyze_instruction(self, instruction: str) -> Dict[str, Any]:
         """Analyze instruction to understand requirements.

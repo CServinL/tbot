@@ -18,14 +18,6 @@ class MinimalDependenciesLoader:
         self.checked_packages = set()
         self.system_info = None
 
-
-class MinimalDependenciesLoader:
-    """Minimal dependencies loader that checks and installs required packages when needed"""
-
-    def __init__(self):
-        self.checked_packages = set()
-        self.system_info = None
-
     def check_system_requirements(self) -> Dict[str, Any]:
         """Check system requirements and capabilities"""
         if self.system_info is not None:

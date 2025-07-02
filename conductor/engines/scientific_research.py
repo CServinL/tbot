@@ -2,20 +2,15 @@ import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class ScientificResearchEngine(BaseLLMEngine):
-    """Engine specialized for scientific research analysis and literature review."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class ScientificResearchEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
 
         # Scientific domains
         self.scientific_domains = {
@@ -58,58 +53,7 @@ class ScientificResearchEngine(BaseLLMEngine):
             'expert_opinion': 'Lowest level - expert opinion and consensus'
         }
 
-    async def load_model(self) -> bool:
-        """Load the scientific research model (typically larger model for complex analysis)."""
-        try:
-            logger.info(f"Loading scientific research model: {self.technical_model_name}")
-
-            # Ensure dependencies for scientific analysis
-            from dependencies_loader import DependenciesLoader
-            deps_loader = DependenciesLoader()
-            await deps_loader.ensure_dependencies(
-                self.technical_model_name,
-                self.precision,
-                features=['optimizations']  # May need optimizations for large model
-            )
-
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded scientific research model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load scientific research model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading scientific research model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the scientific research model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Scientific research model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading scientific research model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate scientific research analysis.
 
         Args:
@@ -126,73 +70,36 @@ class ScientificResearchEngine(BaseLLMEngine):
         Returns:
             str: Scientific analysis or research content
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Scientific research model not loaded")
+        # Parse research parameters
+        domain = kwargs.get('domain', 'general')
+        task_type = kwargs.get('task_type', 'literature_review')
+        evidence_level = kwargs.get('evidence_level', 'high')
+        include_citations = kwargs.get('include_citations', True)
+        peer_review_mode = kwargs.get('peer_review_mode', True)
+        methodology_focus = kwargs.get('methodology_focus', False)
+        statistical_analysis = kwargs.get('statistical_analysis', False)
 
-        try:
-            # Parse research parameters
-            domain = kwargs.get('domain', 'general')
-            task_type = kwargs.get('task_type', 'literature_review')
-            evidence_level = kwargs.get('evidence_level', 'high')
-            include_citations = kwargs.get('include_citations', True)
-            peer_review_mode = kwargs.get('peer_review_mode', True)
-            methodology_focus = kwargs.get('methodology_focus', False)
-            statistical_analysis = kwargs.get('statistical_analysis', False)
+        # Build scientific research prompt
+        research_prompt = self._build_research_prompt(
+            prompt, domain, task_type, evidence_level, include_citations,
+            peer_review_mode, methodology_focus, statistical_analysis
+        )
 
-            # Build scientific research prompt
-            research_prompt = self._build_research_prompt(
-                prompt, domain, task_type, evidence_level, include_citations,
-                peer_review_mode, methodology_focus, statistical_analysis
-            )
+        # Get generation parameters for research
+        gen_params = self._get_research_params(kwargs, task_type, domain)
 
-            # Get generation parameters for research
-            gen_params = self._get_research_params(kwargs, task_type, domain)
+        # Use parent's generate method with the built prompt and parameters
+        response = await super().generate(research_prompt, **gen_params)
 
-            # Tokenize input (handle longer research texts)
-            inputs = self.tokenizer(
-                research_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=4096  # Longer context for research
-            )
+        # Post-process research content
+        processed_content = self._post_process_research_content(
+            response, task_type, domain, kwargs
+        )
 
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        logger.debug(f"Generated {task_type} research content for {domain}: {len(processed_content)} chars")
+        return processed_content
 
-            # Generate research content
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_params['max_new_tokens'],
-                    temperature=gen_params['temperature'],
-                    do_sample=gen_params['do_sample'],
-                    top_p=gen_params['top_p'],
-                    repetition_penalty=gen_params['repetition_penalty'],
-                    pad_token_id=gen_params['pad_token_id'],
-                    eos_token_id=self.tokenizer.eos_token_id
-                )
-
-            # Decode and process research content
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            research_content = self._extract_response(full_output, research_prompt)
-
-            # Post-process research content
-            processed_content = self._post_process_research_content(
-                research_content, task_type, domain, kwargs
-            )
-
-            self.increment_generation_count()
-
-            logger.debug(f"Generated {task_type} research content for {domain}: {len(processed_content)} chars")
-            return processed_content
-
-        except Exception as e:
-            logger.error(f"Error generating scientific research content: {e}")
-            raise
-
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming scientific research content.
 
         Args:
@@ -202,75 +109,33 @@ class ScientificResearchEngine(BaseLLMEngine):
         Yields:
             str: Research content chunks
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Scientific research model not loaded")
+        # Parse research parameters
+        domain = kwargs.get('domain', 'general')
+        task_type = kwargs.get('task_type', 'literature_review')
+        evidence_level = kwargs.get('evidence_level', 'high')
+        include_citations = kwargs.get('include_citations', True)
+        peer_review_mode = kwargs.get('peer_review_mode', True)
+        methodology_focus = kwargs.get('methodology_focus', False)
+        statistical_analysis = kwargs.get('statistical_analysis', False)
 
-        try:
-            from transformers import TextIteratorStreamer
-            import torch
-            from threading import Thread
+        # Build scientific research prompt
+        research_prompt = self._build_research_prompt(
+            prompt, domain, task_type, evidence_level, include_citations,
+            peer_review_mode, methodology_focus, statistical_analysis
+        )
 
-            domain = kwargs.get('domain', 'general')
-            task_type = kwargs.get('task_type', 'literature_review')
-
-            research_prompt = self._build_research_prompt(
-                prompt, domain, task_type,
-                kwargs.get('evidence_level', 'high'),
-                kwargs.get('include_citations', True),
-                kwargs.get('peer_review_mode', True),
-                kwargs.get('methodology_focus', False),
-                kwargs.get('statistical_analysis', False)
-            )
-
-            gen_params = self._get_research_params(kwargs, task_type, domain)
-
-            inputs = self.tokenizer(
-                research_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=4096
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'repetition_penalty': gen_params['repetition_penalty'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
-        except Exception as e:
-            logger.error(f"Error in streaming scientific research: {e}")
-            yield f"Error: {str(e)}"
+        # Get generation parameters for research
+        gen_params = self._get_research_params(kwargs, task_type, domain)
+        
+        # Use parent's generate_stream method with the built prompt and parameters
+        async for chunk in super().generate_stream(research_prompt, **gen_params):
+            yield chunk
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for scientific research."""
-        return self.persona_loader.get_persona_for_category('scientific_research')
+        if hasattr(self, 'persona_loader'):
+            return self.persona_loader.get_persona_for_category('scientific_research')
+        return None
 
     def _build_research_prompt(self,
                                research_query: str,

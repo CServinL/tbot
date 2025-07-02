@@ -20,6 +20,9 @@ class ModelLoader:
         self.is_sdxl = is_sdxl
         self.logger = logger
 
+        # Add this line to expose the configured model id if set elsewhere
+        self.configured_model_id = os.environ.get("DIFFUSIOND_MODEL_ID")
+
     def detect_sdxl_model(self, model_id: str) -> bool:
         """Detect if this is an SDXL model based on the model ID"""
         sdxl_indicators = [
@@ -504,3 +507,28 @@ class ModelLoader:
         print("🔄 Cache cleared - next model load will download fresh files")
 
         return cache_cleared
+
+    def ensure_model_loaded(self, model_id: str):
+        """
+        Ensure the model is loaded. If not, load it synchronously.
+        Returns the loaded pipeline or raises on failure.
+        """
+        if not hasattr(self, "_pipeline") or self._pipeline is None or getattr(self, "_pipeline_model_id", None) != model_id:
+            self._pipeline = self.load_model(model_id)
+            self._pipeline_model_id = model_id
+        return self._pipeline
+
+    def get_pipeline(self):
+        """Return the currently loaded pipeline, or None if not loaded."""
+        return getattr(self, "_pipeline", None)
+
+    def offload_model(self):
+        """Offload/unload the current model pipeline from memory."""
+        if hasattr(self, "_pipeline") and self._pipeline is not None:
+            del self._pipeline
+            self._pipeline = None
+            self._pipeline_model_id = None
+            import gc
+            gc.collect()
+            if self.device == "cuda":
+                torch.cuda.empty_cache()

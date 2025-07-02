@@ -44,6 +44,7 @@ Express when something is a cultural vias and when it is a political vias.
 | **Legal Document Analysis** | Llama 3.1 70B | ~35GB (4-bit) | `meta-llama/Llama-3.1-70B-Instruct` | false | 4-bit |
 | **Code Review/Debugging** | Llama 3.1 8B | ~8GB (FP16) | `meta-llama/Llama-3.1-8B-Instruct` | true | FP16 |
 | **Long Context Tasks** | Llama 3.1 8B | ~12GB+ (varies with context) | `meta-llama/Llama-3.1-8B-Instruct` | true | FP16 |
+| **Image Generation** | Diffusiond (Stable Diffusion) | External | `diffusiond` | false | N/A |
 
 ## Model Consolidation Strategy:
 - **Primary Model**: `meta-llama/Llama-3.1-8B-Instruct` (FP16, ~8GB) handles most tasks and stays loaded
@@ -65,3 +66,6 @@ Express when something is a cultural vias and when it is a political vias.
 - Performance "best" claims are subjective and task-dependent
 - Quantization trades some quality for dramatically reduced resource requirements
 - Many specialized models are general models with domain-specific fine-tuning rather than fundamentally different architectures
+
+## Diffusiond Settings
+url: http://127.0.0.1:8000

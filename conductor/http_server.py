@@ -12,11 +12,11 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-from utils.config_parser import ConfigParser
-from utils.model_registry import ModelRegistry, ModelStatus
-from utils.persona_loader import PersonaLoader
-from model_loader import ModelLoader
-from dependencies_loader import DependenciesLoader
+from conductor.model_loader import ModelLoader
+from conductor.utils.config_parser import ConfigParser
+from conductor.utils.model_registry import ModelRegistry, ModelStatus
+from conductor.utils.persona_loader import PersonaLoader
+from conductor.dependencies_loader import DependenciesLoader
 
 logger = logging.getLogger(__name__)
 
@@ -896,3 +896,23 @@ async def create_and_run_server(host: str = "0.0.0.0", port: int = 8000):
 
 if __name__ == "__main__":
     asyncio.run(create_and_run_server())
+
+# Compare this file's HTTP server implementation to the one in conductor.py:
+# - conductor.py defines `async def start_http_server(conductor: Conductor, host: str = "localhost", port: int = 8000):`
+#   which sets up a FastAPI app, defines endpoints for /generate, /mcp, /status, /health, /engines, /dependencies,
+#   and starts the server with uvicorn.
+# - conductor/http_server.py may contain a similar FastAPI or other HTTP server implementation, or it may be a stub.
+
+# Key points to compare:
+# - Endpoints: conductor.py's version has endpoints for /generate, /mcp, /status, /health, /engines, /dependencies.
+# - Startup: conductor.py's version uses FastAPI and uvicorn, and logs startup info.
+# - conductor/http_server.py may be less complete, missing endpoints, or not used at all.
+
+# Recommendation:
+# If the HTTP server logic in conductor.py is more complete, move it to conductor/http_server.py,
+# and import and use it in conductor.py. Remove any duplicate or outdated code.
+
+# Example (if you want to use the more complete version everywhere):
+# 1. Move the full start_http_server function from conductor.py to conductor/http_server.py.
+# 2. In conductor.py, replace the function with:
+#    from conductor.http_server import start_http_server

@@ -1,21 +1,15 @@
-import asyncio
 import logging
 import random
 from typing import Dict, Any, Optional, AsyncGenerator, List
-from base_llm_engine import BaseLLMEngine
-from model_loader import ModelLoader
-from utils.persona_loader import PersonaLoader
+from conductor.engines.base_engine import BaseEngine
+from conductor.model_loader import ModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-class CreativeWritingEngine(BaseLLMEngine):
-    """Engine specialized for creative writing tasks."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.model_loader = ModelLoader()
-        self.persona_loader = PersonaLoader()
+class CreativeWritingEngine(BaseEngine):
+    def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
+        super().__init__(config, model_loader, persona)
 
         # Writing genres and styles
         self.writing_genres = {
@@ -57,48 +51,7 @@ class CreativeWritingEngine(BaseLLMEngine):
             'symbolism': 'Use symbolic elements to convey deeper meaning'
         }
 
-    async def load_model(self) -> bool:
-        """Load the creative writing model."""
-        try:
-            logger.info(f"Loading creative writing model: {self.technical_model_name}")
-            self.model, self.tokenizer = await self.model_loader.load_model(
-                self.technical_model_name,
-                self.precision
-            )
-
-            if self.model is not None and self.tokenizer is not None:
-                self.is_model_loaded = True
-                self.load_time = asyncio.get_event_loop().time()
-                logger.info(f"Successfully loaded creative writing model")
-
-                # Perform warmup
-                await self.warmup()
-                return True
-            else:
-                logger.error("Failed to load creative writing model")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error loading creative writing model: {e}")
-            return False
-
-    async def unload_model(self) -> bool:
-        """Unload the creative writing model."""
-        try:
-            if self.is_model_loaded:
-                success = await self.model_loader.unload_model(self.technical_model_name)
-                if success:
-                    self.model = None
-                    self.tokenizer = None
-                    self.is_model_loaded = False
-                    logger.info("Creative writing model unloaded")
-                return success
-            return True
-        except Exception as e:
-            logger.error(f"Error unloading creative writing model: {e}")
-            return False
-
-    async def generate(self, prompt: str, **kwargs) -> str:
+    async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate creative writing.
 
         Args:
@@ -115,8 +68,11 @@ class CreativeWritingEngine(BaseLLMEngine):
         Returns:
             str: Creative writing piece
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Creative writing model not loaded")
+
+        if not self.model or not self.tokenizer:
+            raise RuntimeError("Model or tokenizer not available")
 
         try:
             # Parse creative writing parameters
@@ -194,7 +150,7 @@ class CreativeWritingEngine(BaseLLMEngine):
             raise RuntimeError("Creative writing model not loaded")
 
         try:
-            from transformers import TextIteratorStreamer
+            from transformers.generation.streamers import TextIteratorStreamer
             import torch
             from threading import Thread
 
@@ -258,7 +214,13 @@ class CreativeWritingEngine(BaseLLMEngine):
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for creative writing."""
-        return self.persona_loader.get_persona_for_category('creative_writing')
+        if self.persona:
+            return self.persona
+        
+        # Default creative writing system prompt
+        return ("You are a creative writing assistant. Help create engaging, well-written content "
+                "in various genres and styles. Focus on compelling narratives, vivid descriptions, "
+                "authentic characters, and engaging dialogue.")
 
     def _build_creative_prompt(self,
                                user_prompt: str,
