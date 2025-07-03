@@ -1,7 +1,5 @@
-import asyncio
 import logging
-import re
-from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
+from typing import Dict, Any, Optional, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
 
@@ -13,7 +11,7 @@ class ScientificResearchEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Scientific domains
-        self.scientific_domains = {
+        self.scientific_domains: Dict[str, str] = {
             'biology': 'Biological sciences, life sciences, and related fields',
             'chemistry': 'Chemical sciences, materials science, and molecular studies',
             'physics': 'Physical sciences, theoretical and applied physics',
@@ -29,7 +27,7 @@ class ScientificResearchEngine(BaseEngine):
         }
 
         # Research task types
-        self.research_tasks = {
+        self.research_tasks: Dict[str, str] = {
             'literature_review': 'Comprehensive review of existing literature',
             'methodology_analysis': 'Analysis of research methodologies',
             'results_interpretation': 'Interpretation of research findings',
@@ -43,7 +41,7 @@ class ScientificResearchEngine(BaseEngine):
         }
 
         # Citation and evidence standards
-        self.evidence_levels = {
+        self.evidence_levels: Dict[str, str] = {
             'systematic_review': 'Highest level - systematic reviews and meta-analyses',
             'randomized_trial': 'High level - randomized controlled trials',
             'cohort_study': 'Medium-high level - prospective cohort studies',
@@ -52,6 +50,18 @@ class ScientificResearchEngine(BaseEngine):
             'case_series': 'Low level - case series and case reports',
             'expert_opinion': 'Lowest level - expert opinion and consensus'
         }
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for scientific research."""
+        params = super()._get_default_generation_params()
+        # Override defaults for scientific research
+        params.update({
+            'max_new_tokens': 1024,     # Longer outputs for comprehensive research analysis
+            'temperature': 0.5,         # Moderate temperature for balanced accuracy/insight
+            'top_p': 0.85,             # Focused vocabulary for scientific precision
+            'repetition_penalty': 1.1   # Prevent repetition in detailed analysis
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate scientific research analysis.
@@ -70,72 +80,61 @@ class ScientificResearchEngine(BaseEngine):
         Returns:
             str: Scientific analysis or research content
         """
-        # Parse research parameters
-        domain = kwargs.get('domain', 'general')
-        task_type = kwargs.get('task_type', 'literature_review')
-        evidence_level = kwargs.get('evidence_level', 'high')
-        include_citations = kwargs.get('include_citations', True)
-        peer_review_mode = kwargs.get('peer_review_mode', True)
-        methodology_focus = kwargs.get('methodology_focus', False)
-        statistical_analysis = kwargs.get('statistical_analysis', False)
+        if not self.is_model_loaded:
+            raise RuntimeError("Scientific research model not loaded")
 
-        # Build scientific research prompt
-        research_prompt = self._build_research_prompt(
-            prompt, domain, task_type, evidence_level, include_citations,
-            peer_review_mode, methodology_focus, statistical_analysis
-        )
+        try:
+            # Parse research parameters
+            domain = kwargs.get('domain', 'general')
+            task_type = kwargs.get('task_type', 'literature_review')
+            evidence_level = kwargs.get('evidence_level', 'high')
+            include_citations = kwargs.get('include_citations', True)
+            peer_review_mode = kwargs.get('peer_review_mode', True)
+            methodology_focus = kwargs.get('methodology_focus', False)
+            statistical_analysis = kwargs.get('statistical_analysis', False)
 
-        # Get generation parameters for research
-        gen_params = self._get_research_params(kwargs, task_type, domain)
+            # Build scientific research prompt
+            research_prompt = self._build_research_prompt(
+                prompt, domain, task_type, evidence_level, include_citations,
+                peer_review_mode, methodology_focus, statistical_analysis
+            )
 
-        # Use parent's generate method with the built prompt and parameters
-        response = await super().generate(research_prompt, **gen_params)
+            # Get generation parameters for research
+            gen_params = self._get_research_params(kwargs, task_type, domain)
 
-        # Post-process research content
-        processed_content = self._post_process_research_content(
-            response, task_type, domain, kwargs
-        )
+            # Use parent's generate method with the built prompt and parameters
+            response = await super().generate(research_prompt, **gen_params)
 
-        logger.debug(f"Generated {task_type} research content for {domain}: {len(processed_content)} chars")
-        return processed_content
+            # Post-process research content
+            processed_content = self._post_process_research_content(
+                response, task_type, domain, kwargs
+            )
 
-    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
-        """Generate streaming scientific research content.
+            self.increment_generation_count()
 
-        Args:
-            prompt: Research question or content
-            **kwargs: Additional parameters
+            logger.debug(f"Generated {task_type} research content for {domain}: {len(processed_content)} chars")
+            return processed_content
 
-        Yields:
-            str: Research content chunks
-        """
-        # Parse research parameters
-        domain = kwargs.get('domain', 'general')
-        task_type = kwargs.get('task_type', 'literature_review')
-        evidence_level = kwargs.get('evidence_level', 'high')
-        include_citations = kwargs.get('include_citations', True)
-        peer_review_mode = kwargs.get('peer_review_mode', True)
-        methodology_focus = kwargs.get('methodology_focus', False)
-        statistical_analysis = kwargs.get('statistical_analysis', False)
-
-        # Build scientific research prompt
-        research_prompt = self._build_research_prompt(
-            prompt, domain, task_type, evidence_level, include_citations,
-            peer_review_mode, methodology_focus, statistical_analysis
-        )
-
-        # Get generation parameters for research
-        gen_params = self._get_research_params(kwargs, task_type, domain)
-        
-        # Use parent's generate_stream method with the built prompt and parameters
-        async for chunk in super().generate_stream(research_prompt, **gen_params):
-            yield chunk
+        except Exception as e:
+            logger.error(f"Error generating scientific research content: {e}")
+            raise
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for scientific research."""
-        if hasattr(self, 'persona_loader'):
-            return self.persona_loader.get_persona_for_category('scientific_research')
-        return None
+        if self.persona:
+            return self.persona
+        
+        # Default system prompt for scientific research
+        return """You are an expert scientific researcher with deep knowledge across multiple domains. You excel at:
+- Conducting rigorous literature reviews and research analysis
+- Applying appropriate scientific methodologies and standards
+- Evaluating evidence quality and research validity
+- Generating testable hypotheses and experimental designs
+- Providing accurate, evidence-based insights
+- Maintaining scientific objectivity and acknowledging limitations
+- Following peer review standards and best practices
+
+Always prioritize accuracy, cite evidence levels appropriately, and distinguish between established facts and current research."""
 
     def _build_research_prompt(self,
                                research_query: str,
@@ -163,7 +162,7 @@ class ScientificResearchEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
@@ -174,7 +173,7 @@ class ScientificResearchEngine(BaseEngine):
             prompt_parts.append(f"Scientific domain: {domain} - {domain_description}")
 
         # Add task-specific instructions
-        instructions = []
+        instructions: List[str] = []
 
         if task_type in self.research_tasks:
             task_description = self.research_tasks[task_type]
@@ -244,19 +243,22 @@ class ScientificResearchEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Base parameters for scientific research
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 1024),
-            'temperature': 0.5,  # Moderate temperature for balanced accuracy/insight
-            'do_sample': True,
-            'top_p': 0.85,
-            'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
+        # Get base parameters and then customize for scientific research
+        params = self._get_default_generation_params()
+        
+        # Override with user parameters
+        if 'max_tokens' in kwargs:
+            params['max_new_tokens'] = kwargs['max_tokens']
+        if 'temperature' in kwargs:
+            params['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
+        if 'top_p' in kwargs:
+            params['top_p'] = kwargs['top_p']
+        if 'repetition_penalty' in kwargs:
+            params['repetition_penalty'] = kwargs['repetition_penalty']
 
         # Adjust based on task type
         if task_type == 'literature_review':
-            params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 2)
+            params['max_new_tokens'] = min(2048, int(params['max_new_tokens'] * 2))
             params['temperature'] = 0.6  # Slightly higher for comprehensive analysis
         elif task_type == 'methodology_analysis':
             params['temperature'] = 0.4  # Lower for precise methodological analysis
@@ -271,11 +273,7 @@ class ScientificResearchEngine(BaseEngine):
         # Adjust based on domain complexity
         complex_domains = ['physics', 'mathematics', 'neuroscience']
         if domain in complex_domains:
-            params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 1.5)
-
-        # Override with user parameters
-        if 'temperature' in kwargs:
-            params['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
+            params['max_new_tokens'] = min(2048, int(params['max_new_tokens'] * 1.5))
 
         return params
 
