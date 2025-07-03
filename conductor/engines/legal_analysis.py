@@ -1,7 +1,5 @@
-import asyncio
 import logging
-import re
-from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
+from typing import Dict, Any, Optional, AsyncGenerator, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
 
@@ -13,7 +11,7 @@ class LegalAnalysisEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Legal practice areas
-        self.legal_areas = {
+        self.legal_areas: Dict[str, str] = {
             'contract_law': 'Contract analysis, terms, and obligations',
             'corporate_law': 'Corporate governance, compliance, and business law',
             'employment_law': 'Employment agreements, workplace policies, labor law',
@@ -29,7 +27,7 @@ class LegalAnalysisEngine(BaseEngine):
         }
 
         # Document types
-        self.document_types = {
+        self.document_types: Dict[str, str] = {
             'contract': 'Contracts, agreements, and binding documents',
             'statute': 'Laws, regulations, and statutory provisions',
             'case_law': 'Court decisions, precedents, and judicial opinions',
@@ -43,7 +41,7 @@ class LegalAnalysisEngine(BaseEngine):
         }
 
         # Analysis types
-        self.analysis_types = {
+        self.analysis_types: Dict[str, str] = {
             'risk_assessment': 'Identify and evaluate legal risks',
             'compliance_review': 'Check compliance with applicable laws',
             'contract_review': 'Analyze contract terms and obligations',
@@ -55,6 +53,18 @@ class LegalAnalysisEngine(BaseEngine):
             'summary': 'Executive summary of legal documents',
             'redlining': 'Suggest revisions and improvements'
         }
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for legal analysis."""
+        params = super()._get_default_generation_params()
+        # Override defaults for legal analysis
+        params.update({
+            'max_new_tokens': 1536,     # Longer for detailed legal analysis
+            'temperature': 0.3,         # Low temperature for precise legal language
+            'top_p': 0.85,             # Focused vocabulary for legal terminology
+            'repetition_penalty': 1.15  # Stronger penalty to avoid repetitive legal language
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate legal analysis.
@@ -73,9 +83,6 @@ class LegalAnalysisEngine(BaseEngine):
         Returns:
             str: Legal analysis and recommendations
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Legal analysis model not loaded")
-
         try:
             # Parse legal parameters
             legal_area = kwargs.get('legal_area', 'general')
@@ -95,42 +102,13 @@ class LegalAnalysisEngine(BaseEngine):
             # Get generation parameters for legal analysis
             gen_params = self._get_legal_params(kwargs, analysis_type, legal_area)
 
-            # Tokenize input (handle longer legal documents)
-            inputs = self.tokenizer(
-                legal_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=4096  # Longer context for legal documents
-            )
-
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            # Generate legal analysis
-            torch = self.model_loader._lazy_import_torch()
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_params['max_new_tokens'],
-                    temperature=gen_params['temperature'],
-                    do_sample=gen_params['do_sample'],
-                    top_p=gen_params['top_p'],
-                    repetition_penalty=gen_params['repetition_penalty'],
-                    pad_token_id=gen_params['pad_token_id'],
-                    eos_token_id=self.tokenizer.eos_token_id
-                )
-
-            # Decode and process legal analysis
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            legal_analysis = self._extract_response(full_output, legal_prompt)
+            # Use parent's generate method with the built prompt and parameters
+            response = await super().generate(legal_prompt, **gen_params)
 
             # Post-process legal analysis
             processed_analysis = self._post_process_legal_analysis(
-                legal_analysis, analysis_type, legal_area, kwargs
+                response, analysis_type, legal_area, kwargs
             )
-
-            self.increment_generation_count()
 
             logger.debug(f"Generated {analysis_type} legal analysis for {legal_area}: {len(processed_analysis)} chars")
             return processed_analysis
@@ -139,7 +117,7 @@ class LegalAnalysisEngine(BaseEngine):
             logger.error(f"Error generating legal analysis: {e}")
             raise
 
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming legal analysis.
 
         Args:
@@ -149,76 +127,45 @@ class LegalAnalysisEngine(BaseEngine):
         Yields:
             str: Legal analysis chunks
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Legal analysis model not loaded")
+        # Parse legal parameters
+        legal_area = kwargs.get('legal_area', 'general')
+        document_type = kwargs.get('document_type', 'general')
+        analysis_type = kwargs.get('analysis_type', 'summary')
+        jurisdiction = kwargs.get('jurisdiction', 'general')
+        risk_focus = kwargs.get('risk_focus', True)
+        compliance_standards = kwargs.get('compliance_standards', [])
+        cite_precedents = kwargs.get('cite_precedents', False)
 
+        # Build legal analysis prompt
+        legal_prompt = self._build_legal_prompt(
+            prompt, legal_area, document_type, analysis_type,
+            jurisdiction, risk_focus, compliance_standards, cite_precedents
+        )
+
+        # Get generation parameters for legal analysis
+        gen_params = self._get_legal_params(kwargs, analysis_type, legal_area)
+
+        # Since base class doesn't have generate_stream, use regular generate
         try:
-            from transformers import TextIteratorStreamer
-            import torch
-            from threading import Thread
-
-            legal_area = kwargs.get('legal_area', 'general')
-            analysis_type = kwargs.get('analysis_type', 'summary')
-
-            legal_prompt = self._build_legal_prompt(
-                prompt, legal_area,
-                kwargs.get('document_type', 'general'),
-                analysis_type,
-                kwargs.get('jurisdiction', 'general'),
-                kwargs.get('risk_focus', True),
-                kwargs.get('compliance_standards', []),
-                kwargs.get('cite_precedents', False)
+            result = await super().generate(legal_prompt, **gen_params)
+            processed_result = self._post_process_legal_analysis(
+                result, analysis_type, legal_area, kwargs
             )
-
-            gen_params = self._get_legal_params(kwargs, analysis_type, legal_area)
-
-            inputs = self.tokenizer(
-                legal_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=4096
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'repetition_penalty': gen_params['repetition_penalty'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
+            yield processed_result
         except Exception as e:
             logger.error(f"Error in streaming legal analysis: {e}")
             yield f"Error: {str(e)}"
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for legal analysis."""
-        return self.persona_loader.get_persona_for_category('legal_analysis')
+        if self.persona:
+            return self.persona
+        
+        # Default legal analysis system prompt
+        return ("You are an expert legal analyst. Provide thorough, accurate legal analysis "
+                "based on applicable laws, regulations, and legal principles. Identify risks, "
+                "compliance issues, and provide actionable recommendations. Always note when "
+                "legal advice should be sought from qualified counsel.")
 
     def _build_legal_prompt(self,
                             legal_query: str,
@@ -246,13 +193,13 @@ class LegalAnalysisEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
 
         # Add legal context
-        context_parts = []
+        context_parts: List[str] = []
 
         if legal_area in self.legal_areas:
             area_description = self.legal_areas[legal_area]
@@ -269,7 +216,7 @@ class LegalAnalysisEngine(BaseEngine):
             prompt_parts.append("Legal context:\n" + "\n".join(context_parts))
 
         # Add analysis instructions
-        instructions = []
+        instructions: List[str] = []
 
         if analysis_type in self.analysis_types:
             analysis_description = self.analysis_types[analysis_type]
@@ -329,41 +276,35 @@ class LegalAnalysisEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Base parameters for legal analysis
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 1024),
-            'temperature': 0.4,  # Lower temperature for legal precision
-            'do_sample': True,
-            'top_p': 0.85,
-            'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
+        # Use base class parameter validation with legal-specific overrides
+        legal_kwargs = kwargs.copy()
 
         # Adjust based on analysis type
         if analysis_type == 'risk_assessment':
-            params['max_new_tokens'] = min(1536, params['max_new_tokens'] * 1.5)
-            params['temperature'] = 0.5  # Slightly higher for comprehensive risk analysis
+            legal_kwargs['max_new_tokens'] = min(1536, legal_kwargs.get('max_new_tokens', 1536))
+            legal_kwargs['temperature'] = legal_kwargs.get('temperature', 0.5)  # Slightly higher for comprehensive risk analysis
         elif analysis_type == 'due_diligence':
-            params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 2)
-            params['temperature'] = 0.4
+            legal_kwargs['max_new_tokens'] = min(2048, legal_kwargs.get('max_new_tokens', 2048))
+            legal_kwargs['temperature'] = legal_kwargs.get('temperature', 0.4)
         elif analysis_type == 'contract_review':
-            params['max_new_tokens'] = min(1536, params['max_new_tokens'] * 1.5)
-            params['temperature'] = 0.3  # Very precise for contract analysis
+            legal_kwargs['max_new_tokens'] = min(1536, legal_kwargs.get('max_new_tokens', 1536))
+            legal_kwargs['temperature'] = legal_kwargs.get('temperature', 0.3)  # Very precise for contract analysis
         elif analysis_type == 'precedent_analysis':
-            params['temperature'] = 0.5
+            legal_kwargs['temperature'] = legal_kwargs.get('temperature', 0.5)
         elif analysis_type == 'summary':
-            params['temperature'] = 0.4
+            legal_kwargs['temperature'] = legal_kwargs.get('temperature', 0.4)
 
         # Adjust based on legal area complexity
         complex_areas = ['intellectual_property', 'tax_law', 'regulatory']
         if legal_area in complex_areas:
-            params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 1.5)
+            legal_kwargs['max_new_tokens'] = min(2048, legal_kwargs.get('max_new_tokens', 1536) * 1.5)
 
-        # Override with user parameters
+        # Override with user temperature if provided, but clamp for legal analysis
         if 'temperature' in kwargs:
-            params['temperature'] = max(0.1, min(kwargs['temperature'], 0.8))  # Cap at 0.8 for legal
+            legal_kwargs['temperature'] = max(0.1, min(kwargs['temperature'], 0.8))
 
-        return params
+        # Use base class validation which handles clamping and safety limits
+        return self._validate_generation_params(legal_kwargs)
 
     def _post_process_legal_analysis(self,
                                      analysis: str,
