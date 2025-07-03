@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Dict, Any, Optional, AsyncGenerator, List, Union
+from typing import Dict, Any, Optional, List, Union
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
 
@@ -8,6 +8,8 @@ logger = logging.getLogger(__name__)
 
 
 class SummarizationEngine(BaseEngine):
+    """Summarization engine for text condensation and key point extraction."""
+    
     def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
         super().__init__(config, model_loader, persona)
 
@@ -87,43 +89,10 @@ class SummarizationEngine(BaseEngine):
         logger.debug(f"Generated {summary_type} summary ({length}): {len(processed_summary)} chars")
         return processed_summary
 
-    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
-        """Generate streaming summary.
-
-        Args:
-            prompt: Text to summarize
-            **kwargs: Additional parameters
-
-        Yields:
-            str: Summary chunks
-        """
-        # Parse summarization parameters
-        text_to_summarize = kwargs.get('text_to_summarize', prompt)
-        summary_type = kwargs.get('summary_type', 'abstractive')
-        length = kwargs.get('length', 'medium')
-        focus_areas = kwargs.get('focus_areas', [])
-        content_type = kwargs.get('content_type', 'general')
-        preserve_tone = kwargs.get('preserve_tone', False)
-        include_quotes = kwargs.get('include_key_quotes', False)
-
-        # Analyze the input text
-        text_analysis = self._analyze_text_for_summary(text_to_summarize)
-
-        # Build summarization prompt
-        summary_prompt = self._build_summary_prompt(
-            text_to_summarize, summary_type, length, focus_areas,
-            content_type, preserve_tone, include_quotes, text_analysis
-        )
-
-        # Get generation parameters
-        gen_params = self._get_summary_params(kwargs, summary_type, length)
-        
-        # Use parent's generate method with the built prompt and parameters
-        result = await super().generate(summary_prompt, **gen_params)
-        yield result
-
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for summarization."""
+        if self.persona:
+            return self.persona
         return "You are a helpful AI assistant that creates concise and informative summaries. Focus on the key points, main ideas, and important details while maintaining clarity and accuracy."
 
     def _analyze_text_for_summary(self, text: str) -> Dict[str, Any]:
@@ -267,7 +236,6 @@ class SummarizationEngine(BaseEngine):
             'do_sample': True,
             'top_p': 0.85,
             'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None  # type: ignore
         }
 
         # Adjust based on target length
