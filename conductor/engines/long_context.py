@@ -86,7 +86,7 @@ class LongContextEngine(BaseEngine):
         Returns:
             str: Response based on long context analysis
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Long context model not loaded")
 
         try:
@@ -138,7 +138,7 @@ class LongContextEngine(BaseEngine):
         Yields:
             str: Response chunks
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Long context model not loaded")
 
         try:

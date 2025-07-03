@@ -122,6 +122,11 @@ class Conductor:
         
         # Initialize the prompt classificator
         self.classificator: Optional[PromptClassificator] = None
+        
+        # Dynamic model switching state
+        self.default_model_name: Optional[str] = None
+        self.current_active_model: Optional[str] = None
+        self.last_specialized_model: Optional[str] = None
 
         # Engine class mapping
         self.engine_classes: Dict[str, type] = {
@@ -199,10 +204,10 @@ class Conductor:
                         f"(expected: {getattr(self.model_loader, 'model_info_dir', 'unknown')}/{technical_name.replace('/', '--')}.py)"
                     )
 
-            # Only load general_reasoning and image_generation on startup
+            # Only load default model (general_reasoning) on startup
             if not skip_model_loading:
                 await self._ensure_dependencies()
-                await self._load_general_reasoner_and_image_generation()
+                await self._load_default_model()
 
             logger.info("=== Conductor with MCP initialized ===")
             return True
@@ -243,61 +248,167 @@ class Conductor:
                 for warning in validation['warnings']:
                     logger.warning(f"  {warning}")
 
-    async def _load_general_reasoner_and_image_generation(self):
-        """Load only the general_reasoning and image_generation engines at startup"""
-        # Load general_reasoning
+    async def _load_default_model(self):
+        """Load only the default model (general_reasoning) at startup"""
+        # Determine the default model (general_reasoning)
         config = self.engine_configs.get("general_reasoning")
         if not config:
             logger.error("No general_reasoning engine configured.")
+            return
+            
+        technical_name = config['technical_model_name']
+        self.default_model_name = technical_name
+        self.current_active_model = technical_name
+        
+        logger.info(f"Loading default model: {technical_name}")
+        model, tokenizer = await self.model_loader.load_model(
+            technical_name,
+            config.get('precision', 'FP16')
+        )
+        if model and tokenizer:
+            await self._create_engine_for_category("general_reasoning", config)
+            logger.info("✓ Default model loaded and general_reasoning engine created")
         else:
-            technical_name = config['technical_model_name']
-            logger.info(f"Loading general_reasoning model: {technical_name}")
-            model, tokenizer = await self.model_loader.load_model(
-                technical_name,
-                config.get('precision', 'FP16')
-            )
-            if model and tokenizer:
-                await self._create_engine_for_category("general_reasoning", config)
-                logger.info("✓ general_reasoning model loaded and engine created")
-            else:
-                logger.error(f"✗ Failed to load general_reasoning model: {technical_name}")
+            logger.error(f"✗ Failed to load default model: {technical_name}")
 
-        # Load image_generation (no GPU model load, just engine)
+        # Create image_generation engine (no model loading required)
         img_config = self.engine_configs.get("image_generation")
         if img_config:
             await self._create_engine_for_category("image_generation", img_config)
             logger.info("✓ image_generation engine created")
 
-    async def return_to_normal_models(self, keep_models: List[str] = []) -> None:
+    async def _switch_to_specialized_model(self, category: str) -> bool:
         """
-        Unload all models except general_reasoning.
+        Switch to a specialized model for the given category.
+        
+        Args:
+            category: The engine category requiring a specialized model
+            
+        Returns:
+            bool: True if model switch was successful
         """
-        keep_models = [
-            self.engine_configs["general_reasoning"]["technical_model_name"]
-        ] if "general_reasoning" in self.engine_configs else []
-        await self.model_loader.cleanup_unused_models(keep_models=keep_models)  # type: ignore[misc]
-        # Optionally reload general_reasoning if it was unloaded
-        config = self.engine_configs.get("general_reasoning")
-        if config and not self.model_loader.is_model_loaded(config['technical_model_name']):
-            await self.model_loader.load_model(
-                config['technical_model_name'],
+        config = self.engine_configs.get(category)
+        if not config:
+            logger.error(f"No configuration found for category: {category}")
+            return False
+            
+        technical_name = config['technical_model_name']
+        
+        # Skip if already using the correct model
+        if self.current_active_model == technical_name:
+            logger.debug(f"Already using correct model for {category}: {technical_name}")
+            return True
+            
+        # Skip model switching for image generation
+        if category == "image_generation":
+            logger.debug("Skipping model switch for image_generation")
+            return True
+            
+        logger.info(f"Switching to specialized model for {category}: {technical_name}")
+        
+        # Unload current model if it's not the default and different from target
+        if (self.current_active_model and 
+            self.current_active_model != self.default_model_name and 
+            self.current_active_model != technical_name):
+            self.model_loader.unload_model(self.current_active_model)
+            
+        # Load the specialized model if not already loaded
+        if not self.model_loader.is_model_loaded(technical_name):
+            model, tokenizer = await self.model_loader.load_model(
+                technical_name,
                 config.get('precision', 'FP16')
             )
+            if not (model and tokenizer):
+                logger.error(f"Failed to load specialized model: {technical_name}")
+                return False
+                
+        self.last_specialized_model = self.current_active_model
+        self.current_active_model = technical_name
+        logger.info(f"✓ Successfully switched to specialized model: {technical_name}")
+        return True
+
+    async def _switch_back_to_default_model(self) -> bool:
+        """
+        Switch back to the default model after processing with a specialized model.
+        
+        Returns:
+            bool: True if switch was successful
+        """
+        if not self.default_model_name:
+            logger.warning("No default model defined, cannot switch back")
+            return False
+            
+        # Skip if already using default model
+        if self.current_active_model == self.default_model_name:
+            logger.debug("Already using default model")
+            return True
+            
+        logger.info(f"Switching back to default model: {self.default_model_name}")
+        
+        # Unload current specialized model if it's not the default
+        if (self.current_active_model and 
+            self.current_active_model != self.default_model_name):
+            self.model_loader.unload_model(self.current_active_model)
+            
+        # Ensure default model is loaded
+        if not self.model_loader.is_model_loaded(self.default_model_name):
+            config = self.engine_configs.get("general_reasoning")
+            if config:
+                model, tokenizer = await self.model_loader.load_model(
+                    self.default_model_name,
+                    config.get('precision', 'FP16')
+                )
+                if not (model and tokenizer):
+                    logger.error(f"Failed to reload default model: {self.default_model_name}")
+                    return False
+                    
+        self.current_active_model = self.default_model_name
+        logger.info(f"✓ Successfully switched back to default model: {self.default_model_name}")
+        return True
+
+    async def return_to_normal_models(self, keep_models: List[str] = []) -> None:
+        """
+        Legacy method - use cleanup_specialized_models instead.
+        Unload all models except the default model.
+        """
+        logger.info("Using legacy return_to_normal_models, consider using cleanup_specialized_models")
+        await self.cleanup_specialized_models()
+        await self._switch_back_to_default_model()
 
     async def generate(self, prompt: str, category: str = "", **kwargs: Any) -> Any:
         """
-        Generate a response for the given prompt.
+        Generate a response for the given prompt with dynamic model switching.
         If category is not specified, classify the prompt and route to the appropriate engine.
         Returns (category_used, response).
         """
         if not category:
             category = await self.classify_prompt(prompt)
-        engine = await self.get_engine(category)
-        if engine is None:
-            logger.error(f"No engine loaded for category '{category}'.")
-            return category, f"Error: Unable to load engine for category '{category}'. (Insufficient memory or missing model)"
-        response = await engine.generate(prompt, **kwargs)
-        return category, response
+            
+        # Track if we need to switch back to default model after generation
+        need_switch_back = (category != "general_reasoning" and 
+                           category != "image_generation" and
+                           self.current_active_model != self.default_model_name)
+        
+        try:
+            engine = await self.get_engine(category)
+            if engine is None:
+                logger.error(f"No engine loaded for category '{category}'.")
+                return category, f"Error: Unable to load engine for category '{category}'. (Insufficient memory or missing model)"
+                
+            response = await engine.generate(prompt, **kwargs)
+            
+            # Switch back to default model if we used a specialized model
+            if need_switch_back:
+                await self._switch_back_to_default_model()
+                
+            return category, response
+            
+        except Exception as e:
+            logger.error(f"Error during generation for category {category}: {e}")
+            # Ensure we switch back to default model even if generation failed
+            if need_switch_back:
+                await self._switch_back_to_default_model()
+            return category, f"Error during generation: {str(e)}"
 
     async def classify_prompt(self, prompt: str) -> str:
         """Classify a user prompt using the dedicated classificator module."""
@@ -313,13 +424,40 @@ class Conductor:
         return await self.classificator.classify_prompt(prompt, reasoning_engine)
 
     async def get_engine(self, category: str) -> Optional["BaseEngine"]:
+        """
+        Get an engine for the specified category, loading specialized models on-demand.
+        
+        Args:
+            category: The engine category
+            
+        Returns:
+            BaseEngine instance or None if failed
+        """
         # Return existing engine if available
         if category in self.engines:
+            # For specialized engines, ensure the correct model is loaded
+            if category != "general_reasoning" and category != "image_generation":
+                config = self.engine_configs.get(category)
+                if config:
+                    technical_name = config['technical_model_name']
+                    if self.current_active_model != technical_name:
+                        success = await self._switch_to_specialized_model(category)
+                        if not success:
+                            logger.error(f"Failed to switch to specialized model for {category}")
+                            return None
             return self.engines[category]
         
         # Create engine on-demand if configuration exists
         if category in self.engine_configs:
             config = self.engine_configs[category]
+            
+            # For specialized engines, switch to the appropriate model first
+            if category != "general_reasoning" and category != "image_generation":
+                success = await self._switch_to_specialized_model(category)
+                if not success:
+                    logger.error(f"Failed to switch to specialized model for {category}")
+                    return None
+                    
             await self._create_engine_for_category(category, config)
             return self.engines.get(category)
         
@@ -367,6 +505,46 @@ class Conductor:
 
         self.engines[category] = engine
         logger.info(f"✓ Created engine: {category}")
+
+    def get_model_status(self) -> Dict[str, Any]:
+        """
+        Get current model switching status and loaded models information.
+        
+        Returns:
+            Dict containing model status information
+        """
+        return {
+            'default_model': self.default_model_name,
+            'current_active_model': self.current_active_model,
+            'last_specialized_model': self.last_specialized_model,
+            'loaded_models': list(self.model_loader.loaded_models.keys()),
+            'memory_status': self.model_loader.get_memory_status(),
+            'loaded_engines': list(self.engines.keys())
+        }
+
+    async def force_switch_to_default(self) -> bool:
+        """
+        Force switch back to default model, useful for manual control.
+        
+        Returns:
+            bool: True if successful
+        """
+        return await self._switch_back_to_default_model()
+
+    async def cleanup_specialized_models(self) -> int:
+        """
+        Cleanup all specialized models except the default model.
+        
+        Returns:
+            int: Number of models cleaned up
+        """
+        if not self.default_model_name:
+            logger.warning("No default model defined")
+            return 0
+            
+        keep_models = [self.default_model_name]
+        # Also keep image generation external service
+        return await self.model_loader.cleanup_unused_models(keep_models=keep_models)
 
 
 def main_sync() -> None:

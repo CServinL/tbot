@@ -89,7 +89,7 @@ class QuestionAnsweringEngine(BaseEngine):
         Returns:
             str: Answer to the question
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Question answering model not loaded")
 
         try:

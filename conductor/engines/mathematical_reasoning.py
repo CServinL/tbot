@@ -47,7 +47,7 @@ class MathematicalReasoningEngine(BaseEngine):
         Returns:
             str: Mathematical solution with reasoning
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Mathematical reasoning model not loaded")
 
         try:

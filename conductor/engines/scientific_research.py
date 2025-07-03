@@ -80,7 +80,7 @@ class ScientificResearchEngine(BaseEngine):
         Returns:
             str: Scientific analysis or research content
         """
-        if not self.is_model_loaded:
+        if not self.is_loaded():
             raise RuntimeError("Scientific research model not loaded")
 
         try:
