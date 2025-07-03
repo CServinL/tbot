@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, AsyncGenerator, List, Union
@@ -13,7 +12,7 @@ class SummarizationEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Summary types and styles
-        self.summary_types = {
+        self.summary_types: Dict[str, str] = {
             'extractive': 'Extract key sentences from the original text',
             'abstractive': 'Generate new sentences that capture the essence',
             'bullet_points': 'Present key points as bulleted list',
@@ -24,7 +23,7 @@ class SummarizationEngine(BaseEngine):
         }
 
         # Summary lengths
-        self.summary_lengths = {
+        self.summary_lengths: Dict[str, Dict[str, Union[int, str]]] = {
             'brief': {'sentences': 3, 'words': 50, 'description': 'Very concise overview'},
             'short': {'sentences': 5, 'words': 100, 'description': 'Short summary of key points'},
             'medium': {'sentences': 10, 'words': 200, 'description': 'Balanced summary with details'},
@@ -119,15 +118,13 @@ class SummarizationEngine(BaseEngine):
         # Get generation parameters
         gen_params = self._get_summary_params(kwargs, summary_type, length)
         
-        # Use parent's generate_stream method with the built prompt and parameters
-        async for chunk in super().generate_stream(summary_prompt, **gen_params):
-            yield chunk
+        # Use parent's generate method with the built prompt and parameters
+        result = await super().generate(summary_prompt, **gen_params)
+        yield result
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for summarization."""
-        if hasattr(self, 'persona_loader'):
-            return self.persona_loader.get_persona_for_category('summarization')
-        return None
+        return "You are a helpful AI assistant that creates concise and informative summaries. Focus on the key points, main ideas, and important details while maintaining clarity and accuracy."
 
     def _analyze_text_for_summary(self, text: str) -> Dict[str, Any]:
         """Analyze text to inform summarization approach.
@@ -138,22 +135,25 @@ class SummarizationEngine(BaseEngine):
         Returns:
             Dict containing text analysis
         """
-        analysis = {
-            'word_count': len(text.split()),
-            'sentence_count': len(re.findall(r'[.!?]+', text)),
+        word_count = len(text.split())
+        sentence_count = len(re.findall(r'[.!?]+', text))
+        
+        analysis: Dict[str, Any] = {
+            'word_count': word_count,
+            'sentence_count': sentence_count,
             'paragraph_count': len([p for p in text.split('\n\n') if p.strip()]),
             'complexity': 'medium',
             'has_headings': bool(re.search(r'^[A-Z][^.]*:?\s*$', text, re.MULTILINE)),
             'has_lists': bool(re.search(r'^\s*[-*•]\s+', text, re.MULTILINE)),
             'has_numbers': bool(re.search(r'\d+', text)),
-            'estimated_reading_time': 0
+            'estimated_reading_time': 0.0
         }
 
         # Estimate reading time (average 200 words per minute)
-        analysis['estimated_reading_time'] = analysis['word_count'] / 200
+        analysis['estimated_reading_time'] = word_count / 200.0
 
         # Determine complexity
-        avg_sentence_length = analysis['word_count'] / max(analysis['sentence_count'], 1)
+        avg_sentence_length = word_count / max(sentence_count, 1)
         if avg_sentence_length > 25 or analysis['word_count'] > 2000:
             analysis['complexity'] = 'high'
         elif avg_sentence_length < 15 and analysis['word_count'] < 500:
@@ -187,13 +187,13 @@ class SummarizationEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
 
         # Add summarization instructions
-        instructions = []
+        instructions: List[str] = []
 
         # Type-specific instructions
         if summary_type in self.summary_types:
@@ -261,18 +261,22 @@ class SummarizationEngine(BaseEngine):
             Dict[str, Any]: Generation parameters
         """
         # Base parameters for summarization
-        params = {
+        params: Dict[str, Any] = {
             'max_new_tokens': 1024,  # Increased default
             'temperature': 0.4,  # Lower temperature for more focused summaries
             'do_sample': True,
             'top_p': 0.85,
             'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
+            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None  # type: ignore
         }
 
         # Adjust based on target length
         if length in self.summary_lengths:
-            target_words = self.summary_lengths[length]['words']
+            target_words_raw = self.summary_lengths[length]['words']
+            try:
+                target_words = int(target_words_raw)
+            except (ValueError, TypeError):
+                target_words = 200
             # Rough conversion: 1 token ≈ 0.75 words
             params['max_new_tokens'] = min(2048, int(target_words / 0.75 * 1.5))  # Add buffer, allow up to 2048
 
@@ -380,7 +384,7 @@ class SummarizationEngine(BaseEngine):
         """
         # Split into sentences and convert to bullets
         sentences = re.split(r'[.!?]+', summary)
-        bullet_points = []
+        bullet_points: List[str] = []
 
         for sentence in sentences:
             sentence = sentence.strip()
@@ -403,7 +407,7 @@ class SummarizationEngine(BaseEngine):
         """
         # Basic outline formatting - in practice you'd want more sophisticated structure detection
         paragraphs = summary.split('\n\n')
-        outline_parts = []
+        outline_parts: List[str] = []
 
         for i, paragraph in enumerate(paragraphs, 1):
             if paragraph.strip():
@@ -439,7 +443,11 @@ class SummarizationEngine(BaseEngine):
         if target_length not in self.summary_lengths:
             return summary
 
-        target_words = self.summary_lengths[target_length]['words']
+        target_words_raw = self.summary_lengths[target_length]['words']
+        try:
+            target_words = int(target_words_raw)
+        except (ValueError, TypeError):
+            target_words = 200
         current_words = len(summary.split())
 
         # If too long, truncate intelligently
@@ -496,7 +504,7 @@ class SummarizationEngine(BaseEngine):
             Union[List[str], str]: Individual summaries or combined summary
         """
         if combine_method == 'separate':
-            summaries = []
+            summaries: List[str] = []
             for text in texts:
                 summary = await self.generate(text, summary_type='abstractive', length='short')
                 summaries.append(summary)
@@ -557,7 +565,7 @@ class SummarizationEngine(BaseEngine):
         """
         return self.content_types.copy()
 
-    def estimate_summary_length(self, text: str, target_length: str) -> Dict[str, int]:
+    def estimate_summary_length(self, text: str, target_length: str) -> Dict[str, Any]:
         """Estimate summary length for given text and target.
 
         Args:
@@ -571,7 +579,12 @@ class SummarizationEngine(BaseEngine):
 
         if target_length in self.summary_lengths:
             target_info = self.summary_lengths[target_length]
-            compression_ratio = target_info['words'] / analysis['word_count']
+            target_words_raw = target_info['words']
+            try:
+                target_words = int(target_words_raw)
+            except (ValueError, TypeError):
+                target_words = 200
+            compression_ratio = target_words / analysis['word_count']
         else:
             compression_ratio = 0.2  # Default 20% compression
 

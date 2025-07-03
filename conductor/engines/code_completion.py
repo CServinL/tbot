@@ -25,6 +25,18 @@ class CodeCompletionEngine(BaseEngine):
             'sql': ['.sql', 'sql', 'SELECT', 'FROM', 'WHERE', 'INSERT'],
         }
 
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for code completion."""
+        params = super()._get_default_generation_params()
+        # Override defaults for code completion
+        params.update({
+            'max_new_tokens': 100,  # Shorter for completions
+            'temperature': 0.2,     # Lower temperature for deterministic code
+            'top_p': 0.95,         # Slightly higher for code diversity
+            'repetition_penalty': 1.05  # Lower penalty for code patterns
+        })
+        return params
+
     def get_system_prompt(self) -> Optional[str]:
         """Code completion doesn't use system prompts."""
         return None
@@ -44,12 +56,17 @@ class CodeCompletionEngine(BaseEngine):
         # Build completion-specific prompt
         completion_prompt = self._build_completion_prompt(prompt, language)
         
-        # Use shorter max_tokens for completions and lower temperature
-        kwargs['max_tokens'] = max_completion_length
-        kwargs['temperature'] = kwargs.get('temperature', 0.2)  # Lower temperature for code
+        # Set completion-specific parameters and validate them
+        completion_kwargs = kwargs.copy()
+        completion_kwargs['max_completion_length'] = max_completion_length
+        if 'max_tokens' not in completion_kwargs:
+            completion_kwargs['max_tokens'] = max_completion_length
         
-        # Use parent's generate method
-        completion = await super().generate(completion_prompt, **kwargs)
+        # Use base class parameter validation
+        validated_params = self._validate_generation_params(completion_kwargs)
+        
+        # Use parent's generate method with validated parameters
+        completion = await super().generate(completion_prompt, **validated_params)
         
         # Post-process completion
         processed_completion = self._post_process_completion(completion, prompt, language)
@@ -79,9 +96,8 @@ class CodeCompletionEngine(BaseEngine):
         if not completion:
             return completion
 
-        # Remove the original prompt if it appears in completion
-        if original_prompt in completion:
-            completion = completion.replace(original_prompt, "").strip()
+        # Use base class response extraction first
+        completion = self._extract_response(completion, original_prompt)
 
         # Language-specific post-processing
         if language == 'python':
@@ -100,7 +116,7 @@ class CodeCompletionEngine(BaseEngine):
     def _get_cache_key(self, prompt: str, kwargs: Dict[str, Any]) -> str:
         """Generate cache key for completion."""
         import hashlib
-        cache_data = {
+        cache_data: Dict[str, Any] = {
             'prompt': prompt[-200:],  # Only last 200 chars
             'language': kwargs.get('language'),
             'max_tokens': kwargs.get('max_completion_length', 100),
@@ -136,3 +152,68 @@ class CodeCompletionEngine(BaseEngine):
     async def complete_class(self, class_start: str, language: str = 'python') -> str:
         """Complete a class definition."""
         return await self.generate(class_start, language=language, max_completion_length=300)
+
+    def _should_use_cache(self, prompt: str, kwargs: Dict[str, Any]) -> bool:
+        """Determine if caching should be used for this completion request."""
+        # Don't cache very short prompts or requests with high temperature
+        if len(prompt.strip()) < 10:
+            return False
+        if kwargs.get('temperature', 0.2) > 0.5:
+            return False
+        return True
+    
+    def _estimate_completion_quality(self, completion: str, language: Optional[str]) -> Dict[str, Any]:
+        """Estimate the quality of a code completion."""
+        quality_score = 0.0
+        issues: List[str] = []
+        
+        if not completion.strip():
+            return {'score': 0.0, 'issues': ['Empty completion']}
+        
+        # Basic syntax checks
+        if language == 'python':
+            # Check for basic Python syntax patterns
+            if completion.count('(') != completion.count(')'):
+                issues.append('Unmatched parentheses')
+            if completion.count('[') != completion.count(']'):
+                issues.append('Unmatched brackets')
+            if completion.count('{') != completion.count('}'):
+                issues.append('Unmatched braces')
+        
+        # Length appropriateness
+        if len(completion) > 500:
+            issues.append('Completion too long')
+            quality_score -= 0.2
+        elif len(completion) < 5:
+            issues.append('Completion too short')
+            quality_score -= 0.3
+        else:
+            quality_score += 0.3
+        
+        # Check for common artifacts
+        if any(artifact in completion.lower() for artifact in ['assistant:', 'human:', '```']):
+            issues.append('Contains conversation artifacts')
+            quality_score -= 0.4
+        
+        # Base score
+        quality_score += 0.7
+        quality_score = max(0.0, min(1.0, quality_score))
+        
+        return {
+            'score': quality_score,
+            'issues': issues,
+            'length': len(completion),
+            'language': language
+        }
+
+    async def generate_with_quality_check(self, prompt: str, **kwargs: Any) -> Dict[str, Any]:
+        """Generate completion with quality assessment."""
+        completion = await self.generate(prompt, **kwargs)
+        language = kwargs.get('language', self._detect_language(prompt))
+        quality = self._estimate_completion_quality(completion, language)
+        
+        return {
+            'completion': completion,
+            'quality': quality,
+            'cached': self._get_cache_key(prompt, kwargs) in self.completion_cache
+        }

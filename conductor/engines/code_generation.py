@@ -1,7 +1,6 @@
-import asyncio
 import logging
 import re
-from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
+from typing import Dict, Any, Optional, AsyncGenerator, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
 
@@ -90,15 +89,13 @@ class CodeGenerationEngine(BaseEngine):
         # Get generation parameters
         gen_params = self._get_code_generation_params(kwargs, language)
         
-        # Use parent's generate_stream method with the built prompt and parameters
-        async for chunk in super().generate_stream(generation_prompt, **gen_params):
-            yield chunk
+        # Since base class doesn't have generate_stream, use regular generate
+        result = await super().generate(generation_prompt, **gen_params)
+        yield result
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for code generation."""
-        if hasattr(self, 'persona_loader'):
-            return self.persona_loader.get_persona_for_category('code_generation')
-        return None
+        return "You are an expert code generator. Generate clean, efficient, and well-documented code following best practices for the specified programming language."
 
     def _build_code_generation_prompt(self,
                                       user_request: str,
@@ -120,7 +117,7 @@ class CodeGenerationEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
@@ -161,13 +158,13 @@ class CodeGenerationEngine(BaseEngine):
             Dict[str, Any]: Generation parameters
         """
         # Base parameters for code generation
-        params = {
+        params: Dict[str, Any] = {
             'max_new_tokens': kwargs.get('max_tokens', 1024),
             'temperature': 0.3,  # Lower temperature for more deterministic code
             'do_sample': True,
             'top_p': 0.85,
             'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
+            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None  # type: ignore
         }
 
         # Language-specific adjustments
@@ -245,7 +242,7 @@ class CodeGenerationEngine(BaseEngine):
 
         # Remove explanatory text that sometimes appears at the end
         lines = code.split('\n')
-        clean_lines = []
+        clean_lines: List[str] = []
 
         for line in lines:
             # Stop at common explanatory phrases
@@ -267,7 +264,7 @@ class CodeGenerationEngine(BaseEngine):
             str: Formatted Python code
         """
         lines = code.split('\n')
-        formatted_lines = []
+        formatted_lines: List[str] = []
 
         for line in lines:
             # Ensure proper spacing after commas
@@ -290,7 +287,7 @@ class CodeGenerationEngine(BaseEngine):
             str: Formatted JavaScript code
         """
         lines = code.split('\n')
-        formatted_lines = []
+        formatted_lines: List[str] = []
 
         for line in lines:
             # Ensure semicolons at end of statements (basic check)
@@ -315,7 +312,7 @@ class CodeGenerationEngine(BaseEngine):
             str: Formatted Java code
         """
         lines = code.split('\n')
-        formatted_lines = []
+        formatted_lines: List[str] = []
 
         for line in lines:
             # Ensure proper Java naming conventions (basic)
