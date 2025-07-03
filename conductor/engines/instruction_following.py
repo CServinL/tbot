@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Dict, Any, Optional, AsyncGenerator, List, Union
+from typing import Dict, Any, Optional, AsyncGenerator, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
 
@@ -12,7 +12,7 @@ class InstructionFollowingEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Instruction types and patterns
-        self.instruction_types = {
+        self.instruction_types: Dict[str, str] = {
             'task_completion': 'Complete a specific task or assignment',
             'format_conversion': 'Convert content from one format to another',
             'analysis_request': 'Analyze and provide insights on given content',
@@ -24,7 +24,7 @@ class InstructionFollowingEngine(BaseEngine):
         }
 
         # Common instruction patterns
-        self.instruction_patterns = {
+        self.instruction_patterns: Dict[str, str] = {
             'step_by_step': r'step.?by.?step|one.?by.?one|sequentially',
             'list_format': r'list|bullet.?points|numbered|enumerate',
             'table_format': r'table|tabular|rows?.?and.?columns?',
@@ -34,6 +34,18 @@ class InstructionFollowingEngine(BaseEngine):
             'comparison_request': r'compare|contrast|difference|similarity',
             'explanation_request': r'explain|clarify|describe|elaborate'
         }
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for instruction following."""
+        params = super()._get_default_generation_params()
+        # Override defaults for instruction following
+        params.update({
+            'max_new_tokens': 1024,     # Enough for detailed instructions
+            'temperature': 0.5,         # Moderate temperature for balanced creativity/accuracy
+            'top_p': 0.9,              # Focused but not too narrow
+            'repetition_penalty': 1.1   # Prevent repetitive responses
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Follow instructions and generate appropriate response.
@@ -50,35 +62,40 @@ class InstructionFollowingEngine(BaseEngine):
         Returns:
             str: Response following the instructions
         """
-        # Parse instruction parameters
-        instruction_type = kwargs.get('instruction_type', 'task_completion')
-        context = kwargs.get('context')
-        format_requirements = kwargs.get('format_requirements')
-        examples = kwargs.get('examples', [])
-        constraints = kwargs.get('constraints', [])
+        try:
+            # Parse instruction parameters
+            instruction_type = kwargs.get('instruction_type', 'task_completion')
+            context = kwargs.get('context')
+            format_requirements = kwargs.get('format_requirements')
+            examples = kwargs.get('examples', [])
+            constraints = kwargs.get('constraints', [])
 
-        # Analyze the instruction
-        instruction_analysis = self._analyze_instruction(prompt)
+            # Analyze the instruction
+            instruction_analysis = self._analyze_instruction(prompt)
 
-        # Build instruction-following prompt
-        instruction_prompt = self._build_instruction_prompt(
-            prompt, instruction_type, context, format_requirements,
-            examples, constraints, instruction_analysis
-        )
+            # Build instruction-following prompt
+            instruction_prompt = self._build_instruction_prompt(
+                prompt, instruction_type, context, format_requirements,
+                examples, constraints, instruction_analysis
+            )
 
-        # Get generation parameters
-        gen_params = self._get_instruction_params(kwargs, instruction_analysis)
-        
-        # Use parent's generate method with the built prompt and parameters
-        response = await super().generate(instruction_prompt, **gen_params)
+            # Get generation parameters
+            gen_params = self._get_instruction_params(kwargs, instruction_analysis)
+            
+            # Use parent's generate method with the built prompt and parameters
+            response = await super().generate(instruction_prompt, **gen_params)
 
-        # Post-process based on instruction requirements
-        processed_response = self._post_process_instruction_response(
-            response, instruction_analysis, kwargs
-        )
+            # Post-process based on instruction requirements
+            processed_response = self._post_process_instruction_response(
+                response, instruction_analysis, kwargs
+            )
 
-        logger.debug(f"Followed instruction: {len(processed_response)} chars")
-        return processed_response
+            logger.debug(f"Followed instruction: {len(processed_response)} chars")
+            return processed_response
+
+        except Exception as e:
+            logger.error(f"Error following instruction: {e}")
+            raise
 
     async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming instruction response.
@@ -109,15 +126,26 @@ class InstructionFollowingEngine(BaseEngine):
         # Get generation parameters
         gen_params = self._get_instruction_params(kwargs, instruction_analysis)
         
-        # Use parent's generate_stream method with the built prompt and parameters
-        async for chunk in super().generate_stream(instruction_prompt, **gen_params):
-            yield chunk
+        # Since base class doesn't have generate_stream, use regular generate
+        try:
+            result = await super().generate(instruction_prompt, **gen_params)
+            processed_result = self._post_process_instruction_response(
+                result, instruction_analysis, kwargs
+            )
+            yield processed_result
+        except Exception as e:
+            logger.error(f"Error in streaming instruction following: {e}")
+            yield f"Error: {str(e)}"
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for instruction following."""
-        if hasattr(self, 'persona_loader'):
-            return self.persona_loader.get_persona_for_category('instruction_following')
-        return None
+        if self.persona:
+            return self.persona
+        
+        # Default instruction following system prompt
+        return ("You are an expert assistant that follows instructions precisely. "
+                "Analyze the given instruction carefully and provide accurate, complete responses "
+                "that address all requirements. Maintain clarity and be thorough in your responses.")
 
     def _analyze_instruction(self, instruction: str) -> Dict[str, Any]:
         """Analyze instruction to understand requirements.
@@ -128,7 +156,7 @@ class InstructionFollowingEngine(BaseEngine):
         Returns:
             Dict containing instruction analysis
         """
-        analysis = {
+        analysis: Dict[str, Any] = {
             'detected_patterns': [],
             'complexity': 'medium',
             'requires_formatting': False,
@@ -197,7 +225,7 @@ class InstructionFollowingEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
@@ -215,7 +243,7 @@ class InstructionFollowingEngine(BaseEngine):
             prompt_parts.append(examples_text)
 
         # Add format requirements
-        format_instructions = []
+        format_instructions: List[str] = []
 
         if format_requirements:
             format_instructions.append(f"Format requirement: {format_requirements}")
@@ -262,38 +290,32 @@ class InstructionFollowingEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Base parameters for instruction following
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 1024),
-            'temperature': 0.5,  # Moderate temperature for balanced creativity/accuracy
-            'do_sample': True,
-            'top_p': 0.9,
-            'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
+        # Use base class parameter validation with instruction-specific overrides
+        instruction_kwargs = kwargs.copy()
 
         # Adjust based on instruction complexity
         if analysis['complexity'] == 'high':
-            params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 2)
-            params['temperature'] = 0.6  # Slightly higher for complex tasks
+            instruction_kwargs['max_new_tokens'] = min(2048, instruction_kwargs.get('max_new_tokens', 2048))
+            instruction_kwargs['temperature'] = instruction_kwargs.get('temperature', 0.6)  # Slightly higher for complex tasks
         elif analysis['complexity'] == 'low':
-            params['max_new_tokens'] = min(512, params['max_new_tokens'])
-            params['temperature'] = 0.4  # Lower for simple, precise tasks
+            instruction_kwargs['max_new_tokens'] = min(512, instruction_kwargs.get('max_new_tokens', 512))
+            instruction_kwargs['temperature'] = instruction_kwargs.get('temperature', 0.4)  # Lower for simple, precise tasks
 
         # Adjust based on output type
         if analysis['output_type'] in ['list', 'table', 'steps']:
-            params['temperature'] = 0.4  # Lower for structured output
-            params['repetition_penalty'] = 1.05  # Allow some repetition in structured formats
+            instruction_kwargs['temperature'] = instruction_kwargs.get('temperature', 0.4)  # Lower for structured output
+            instruction_kwargs['repetition_penalty'] = 1.05  # Allow some repetition in structured formats
 
         # Adjust for formatting requirements
         if analysis['requires_formatting']:
-            params['temperature'] = 0.4
+            instruction_kwargs['temperature'] = instruction_kwargs.get('temperature', 0.4)
 
-        # Override with user parameters
+        # Override with user temperature if provided, but clamp for instruction following
         if 'temperature' in kwargs:
-            params['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
+            instruction_kwargs['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
 
-        return params
+        # Use base class validation which handles clamping and safety limits
+        return self._validate_generation_params(instruction_kwargs)
 
     def _post_process_instruction_response(self,
                                            response: str,
@@ -363,7 +385,7 @@ class InstructionFollowingEngine(BaseEngine):
             str: List-formatted text
         """
         lines = text.split('\n')
-        formatted_lines = []
+        formatted_lines: List[str] = []
 
         for line in lines:
             stripped = line.strip()
@@ -391,7 +413,7 @@ class InstructionFollowingEngine(BaseEngine):
         lines = text.split('\n')
 
         # Look for tabular data
-        table_lines = []
+        table_lines: List[str] = []
         for line in lines:
             if '|' in line or '\t' in line:
                 table_lines.append(line)
@@ -417,7 +439,7 @@ class InstructionFollowingEngine(BaseEngine):
             str: Step-formatted text
         """
         lines = text.split('\n')
-        formatted_lines = []
+        formatted_lines: List[str] = []
         step_counter = 1
 
         for line in lines:
@@ -446,7 +468,7 @@ class InstructionFollowingEngine(BaseEngine):
         Returns:
             str: Validated response (may include completeness notes)
         """
-        issues = []
+        issues: List[str] = []
 
         # Check for required examples
         if analysis['requires_examples'] and 'example' not in response.lower():
@@ -478,7 +500,7 @@ class InstructionFollowingEngine(BaseEngine):
         Returns:
             List[str]: Results for each step
         """
-        results = []
+        results: List[str] = []
         accumulated_context = context or ""
 
         for i, step in enumerate(steps, 1):
