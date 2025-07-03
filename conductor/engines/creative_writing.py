@@ -1,5 +1,4 @@
 import logging
-import random
 from typing import Dict, Any, Optional, AsyncGenerator, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
@@ -12,7 +11,7 @@ class CreativeWritingEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Writing genres and styles
-        self.writing_genres = {
+        self.writing_genres: Dict[str, Dict[str, Any]] = {
             'fiction': {
                 'description': 'Creative fictional narratives',
                 'styles': ['literary', 'genre', 'experimental', 'commercial']
@@ -40,7 +39,7 @@ class CreativeWritingEngine(BaseEngine):
         }
 
         # Writing techniques and elements
-        self.writing_techniques = {
+        self.writing_techniques: Dict[str, str] = {
             'show_dont_tell': 'Use vivid scenes and actions instead of exposition',
             'dialogue_driven': 'Advance plot and reveal character through dialogue',
             'stream_of_consciousness': 'Present thoughts and feelings as they occur',
@@ -50,6 +49,18 @@ class CreativeWritingEngine(BaseEngine):
             'rich_imagery': 'Employ vivid sensory descriptions',
             'symbolism': 'Use symbolic elements to convey deeper meaning'
         }
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for creative writing."""
+        params = super()._get_default_generation_params()
+        # Override defaults for creative writing
+        params.update({
+            'max_new_tokens': 1024,     # Enough for creative pieces
+            'temperature': 0.8,         # Higher temperature for creativity
+            'top_p': 0.95,             # Higher top_p for diverse vocabulary
+            'repetition_penalty': 1.05  # Light repetition penalty for creative flow
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate creative writing.
@@ -68,12 +79,6 @@ class CreativeWritingEngine(BaseEngine):
         Returns:
             str: Creative writing piece
         """
-        if not self.is_loaded():
-            raise RuntimeError("Creative writing model not loaded")
-
-        if not self.model or not self.tokenizer:
-            raise RuntimeError("Model or tokenizer not available")
-
         try:
             # Parse creative writing parameters
             genre = kwargs.get('genre', 'fiction')
@@ -92,42 +97,13 @@ class CreativeWritingEngine(BaseEngine):
             # Get generation parameters optimized for creativity
             gen_params = self._get_creative_params(kwargs, genre, style)
 
-            # Tokenize input
-            inputs = self.tokenizer(
-                writing_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=2048
-            )
+            # Use parent's generate method with the built prompt and parameters
+            response = await super().generate(writing_prompt, **gen_params)
 
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            # Generate creative content
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_params['max_new_tokens'],
-                    temperature=gen_params['temperature'],
-                    do_sample=gen_params['do_sample'],
-                    top_p=gen_params['top_p'],
-                    repetition_penalty=gen_params['repetition_penalty'],
-                    pad_token_id=gen_params['pad_token_id'],
-                    eos_token_id=self.tokenizer.eos_token_id
-                )
-
-            # Decode and process creative writing
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            creative_text = self._extract_response(full_output, writing_prompt)
-
-            # Post-process creative writing
+            # Post-process the creative writing
             processed_text = self._post_process_creative_writing(
-                creative_text, genre, style, kwargs
+                response, genre, style, kwargs
             )
-
-            self.increment_generation_count()
 
             logger.debug(f"Generated {genre} writing: {len(processed_text)} chars")
             return processed_text
@@ -136,7 +112,7 @@ class CreativeWritingEngine(BaseEngine):
             logger.error(f"Error generating creative writing: {e}")
             raise
 
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Generate streaming creative writing.
 
         Args:
@@ -146,68 +122,30 @@ class CreativeWritingEngine(BaseEngine):
         Yields:
             str: Writing chunks
         """
-        if not self.is_model_loaded:
-            raise RuntimeError("Creative writing model not loaded")
+        # Parse creative writing parameters
+        genre = kwargs.get('genre', 'fiction')
+        style = kwargs.get('style', 'literary')
+        length = kwargs.get('length', 'medium')
+        tone = kwargs.get('tone', 'engaging')
+        techniques = kwargs.get('techniques', [])
+        characters = kwargs.get('characters')
+        setting = kwargs.get('setting')
 
+        # Build creative writing prompt
+        writing_prompt = self._build_creative_prompt(
+            prompt, genre, style, length, tone, techniques, characters, setting
+        )
+
+        # Get generation parameters optimized for creativity
+        gen_params = self._get_creative_params(kwargs, genre, style)
+
+        # Since base class doesn't have generate_stream, use regular generate
         try:
-            from transformers.generation.streamers import TextIteratorStreamer
-            import torch
-            from threading import Thread
-
-            genre = kwargs.get('genre', 'fiction')
-            style = kwargs.get('style', 'literary')
-
-            writing_prompt = self._build_creative_prompt(
-                prompt, genre, style,
-                kwargs.get('length', 'medium'),
-                kwargs.get('tone', 'engaging'),
-                kwargs.get('techniques', []),
-                kwargs.get('characters'),
-                kwargs.get('setting')
+            result = await super().generate(writing_prompt, **gen_params)
+            processed_result = self._post_process_creative_writing(
+                result, genre, style, kwargs
             )
-
-            gen_params = self._get_creative_params(kwargs, genre, style)
-
-            inputs = self.tokenizer(
-                writing_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=2048
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'repetition_penalty': gen_params['repetition_penalty'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
+            yield processed_result
         except Exception as e:
             logger.error(f"Error in streaming creative writing: {e}")
             yield f"[Error: {str(e)}]"
@@ -248,13 +186,13 @@ class CreativeWritingEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
 
         # Add creative writing instructions
-        instructions = [
+        instructions: List[str] = [
             f"Write a {genre} piece in a {style} style",
             f"Target length: {length}",
             f"Tone: {tone}"
@@ -267,7 +205,7 @@ class CreativeWritingEngine(BaseEngine):
 
         # Add technique instructions
         if techniques:
-            technique_descriptions = []
+            technique_descriptions: List[str] = []
             for technique in techniques:
                 if technique in self.writing_techniques:
                     technique_descriptions.append(self.writing_techniques[technique])
@@ -285,7 +223,7 @@ class CreativeWritingEngine(BaseEngine):
             instructions.append(f"Setting: {setting}")
 
         # Length-specific instructions
-        length_guidance = {
+        length_guidance: Dict[str, str] = {
             'short': 'Keep it concise and impactful (200-500 words)',
             'medium': 'Develop the piece with good detail (500-1000 words)',
             'long': 'Create a substantial piece with rich development (1000+ words)'
@@ -319,49 +257,43 @@ class CreativeWritingEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Base parameters for creative writing (higher temperature for creativity)
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 1024),
-            'temperature': 0.8,  # High temperature for creativity
-            'do_sample': True,
-            'top_p': 0.95,  # Higher top_p for more diverse vocabulary
-            'repetition_penalty': 1.05,  # Light repetition penalty
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
-
+        # Use base class parameter validation with creative-specific overrides
+        creative_kwargs = kwargs.copy()
+        
         # Adjust based on genre
         if genre == 'poetry':
-            params['temperature'] = 0.9  # Even higher for poetry
-            params['repetition_penalty'] = 1.0  # Allow repetition in poetry
+            creative_kwargs['temperature'] = creative_kwargs.get('temperature', 0.9)  # Even higher for poetry
+            creative_kwargs['repetition_penalty'] = 1.0  # Allow repetition in poetry
         elif genre == 'screenplay':
-            params['temperature'] = 0.7  # More structured for scripts
+            creative_kwargs['temperature'] = creative_kwargs.get('temperature', 0.7)  # More structured for scripts
         elif genre == 'dialogue':
-            params['temperature'] = 0.75  # Balanced for natural conversation
+            creative_kwargs['temperature'] = creative_kwargs.get('temperature', 0.75)  # Balanced for natural conversation
         elif genre == 'humor':
-            params['temperature'] = 0.85  # High for creative humor
+            creative_kwargs['temperature'] = creative_kwargs.get('temperature', 0.85)  # High for creative humor
 
         # Adjust based on style
         if style == 'experimental':
-            params['temperature'] = 0.9
-            params['top_p'] = 0.98
+            creative_kwargs['temperature'] = creative_kwargs.get('temperature', 0.9)
+            creative_kwargs['top_p'] = creative_kwargs.get('top_p', 0.98)
         elif style == 'commercial':
-            params['temperature'] = 0.7
+            creative_kwargs['temperature'] = creative_kwargs.get('temperature', 0.7)
         elif style == 'literary':
-            params['temperature'] = 0.8
-            params['top_p'] = 0.9
+            creative_kwargs['temperature'] = creative_kwargs.get('temperature', 0.8)
+            creative_kwargs['top_p'] = creative_kwargs.get('top_p', 0.9)
 
         # Adjust based on length
         length = kwargs.get('length', 'medium')
         if length == 'short':
-            params['max_new_tokens'] = min(600, params['max_new_tokens'])
+            creative_kwargs['max_new_tokens'] = min(600, creative_kwargs.get('max_new_tokens', 600))
         elif length == 'long':
-            params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 2)
+            creative_kwargs['max_new_tokens'] = min(2048, creative_kwargs.get('max_new_tokens', 2048))
 
-        # Override with user parameters
+        # Override with user temperature if provided, but clamp for creative writing
         if 'temperature' in kwargs:
-            params['temperature'] = max(0.3, min(kwargs['temperature'], 1.5))
+            creative_kwargs['temperature'] = max(0.3, min(kwargs['temperature'], 1.5))
 
-        return params
+        # Use base class validation which handles clamping and safety limits
+        return self._validate_generation_params(creative_kwargs)
 
     def _post_process_creative_writing(self,
                                        text: str,
@@ -433,7 +365,7 @@ class CreativeWritingEngine(BaseEngine):
             str: Formatted poem
         """
         lines = poem.split('\n')
-        formatted_lines = []
+        formatted_lines: List[str] = []
 
         for line in lines:
             # Clean up line
@@ -455,7 +387,7 @@ class CreativeWritingEngine(BaseEngine):
             str: Formatted screenplay
         """
         lines = script.split('\n')
-        formatted_lines = []
+        formatted_lines: List[str] = []
 
         for line in lines:
             stripped = line.strip()
@@ -485,7 +417,7 @@ class CreativeWritingEngine(BaseEngine):
         """
         # Basic dialogue formatting - in practice you'd want more sophisticated parsing
         lines = dialogue.split('\n')
-        formatted_lines = []
+        formatted_lines: List[str] = []
 
         for line in lines:
             stripped = line.strip()
