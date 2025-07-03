@@ -41,6 +41,8 @@ class ImageGenerationEngine(BaseEngine):
         """
         Call the diffusiond API using urllib3 instead of aiohttp.
         """
+        if not self.diffusiond_url:
+            raise RuntimeError("diffusiond_url is not configured")
         url = f"{self.diffusiond_url.rstrip('/')}/{endpoint.lstrip('/')}"
         http = urllib3.PoolManager()
         headers = {"Content-Type": "application/json"}
@@ -56,6 +58,3 @@ class ImageGenerationEngine(BaseEngine):
         if response.status != 200:
             raise RuntimeError(f"Diffusiond API error: {response.status} {response.data.decode('utf-8')}")
         return response.data.decode("utf-8")
-
-    def get_system_prompt(self) -> Optional[str]:
-        return "You are an advanced image generation model. Generate high-quality images from text prompts."
