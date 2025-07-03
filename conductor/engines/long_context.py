@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
@@ -13,7 +12,7 @@ class LongContextEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Context processing strategies
-        self.context_strategies = {
+        self.context_strategies: Dict[str, str] = {
             'full_context': 'Process entire context as one unit',
             'sliding_window': 'Use sliding window approach for very long texts',
             'hierarchical': 'Break into sections and process hierarchically',
@@ -23,7 +22,7 @@ class LongContextEngine(BaseEngine):
         }
 
         # Document types that benefit from long context
-        self.document_types = {
+        self.document_types: Dict[str, str] = {
             'research_paper': 'Academic papers and research documents',
             'legal_document': 'Contracts, legal briefs, and regulatory texts',
             'technical_manual': 'Technical documentation and manuals',
@@ -37,7 +36,7 @@ class LongContextEngine(BaseEngine):
         }
 
         # Task types for long context
-        self.long_context_tasks = {
+        self.long_context_tasks: Dict[str, str] = {
             'comprehensive_summary': 'Create comprehensive summary of entire document',
             'key_insights': 'Extract key insights and main themes',
             'question_answering': 'Answer questions based on full context',
@@ -51,12 +50,24 @@ class LongContextEngine(BaseEngine):
         }
 
         # Memory management for long contexts
-        self.context_limits = {
+        self.context_limits: Dict[str, int] = {
             'max_input_tokens': 32768,  # Adjust based on model capabilities
             'chunk_size': 4096,
             'overlap_size': 512,
-            'summary_compression_ratio': 0.3
+            'summary_compression_ratio': 3  # Changed from 0.3 to avoid float/int issues
         }
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for long context processing."""
+        params = super()._get_default_generation_params()
+        # Override defaults for long context processing
+        params.update({
+            'max_new_tokens': 2048,     # Longer outputs for comprehensive analysis
+            'temperature': 0.5,         # Balanced temperature for long context
+            'top_p': 0.9,              # Diverse vocabulary for detailed analysis
+            'repetition_penalty': 1.2   # Higher penalty to avoid repetition in long outputs
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Process long context and generate response.
@@ -82,9 +93,7 @@ class LongContextEngine(BaseEngine):
             # Parse long context parameters
             context_text = kwargs.get('context_text', prompt)
             strategy = kwargs.get('strategy', 'full_context')
-            document_type = kwargs.get('document_type', 'general')
             task_type = kwargs.get('task_type', 'comprehensive_summary')
-            preserve_structure = kwargs.get('preserve_structure', True)
             focus_query = kwargs.get('focus_query')
             chunk_overlap = kwargs.get('chunk_overlap', self.context_limits['overlap_size'])
 
@@ -154,9 +163,19 @@ class LongContextEngine(BaseEngine):
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for long context processing."""
-        if hasattr(self, 'persona_loader'):
-            return self.persona_loader.get_persona_for_category('long_context')
-        return None
+        if self.persona:
+            return self.persona
+        
+        # Default system prompt for long context processing
+        return """You are an expert at analyzing and processing long documents. You excel at:
+- Extracting key information from extensive texts
+- Summarizing complex documents while preserving important details
+- Finding connections and relationships across large amounts of text
+- Breaking down complex information into clear, actionable insights
+- Maintaining context and coherence across multiple sections
+- Identifying important patterns, themes, and contradictions
+
+Always provide thorough, well-structured responses that demonstrate deep understanding of the full context."""
 
     def _analyze_long_context(self, text: str) -> Dict[str, Any]:
         """Analyze long context to determine processing approach.
@@ -167,7 +186,7 @@ class LongContextEngine(BaseEngine):
         Returns:
             Dict containing context analysis
         """
-        analysis = {
+        analysis: Dict[str, Any] = {
             'char_count': len(text),
             'word_count': len(text.split()),
             'line_count': len(text.split('\n')),
@@ -310,8 +329,8 @@ class LongContextEngine(BaseEngine):
         Returns:
             str: Processed response
         """
-        chunks = self._create_overlapping_chunks(context, self.context_limits['chunk_size'], overlap)
-        chunk_results = []
+        chunks = self._create_overlapping_chunks(context, int(self.context_limits['chunk_size']), overlap)
+        chunk_results: List[str] = []
 
         for i, chunk in enumerate(chunks):
             chunk_prompt = self._build_long_context_prompt(
@@ -345,7 +364,7 @@ class LongContextEngine(BaseEngine):
         sections = self._identify_sections(context)
 
         # Process each section
-        section_results = []
+        section_results: List[Tuple[str, str]] = []
         for section_title, section_content in sections:
             section_prompt = self._build_long_context_prompt(
                 section_content, task_type, focus_query, 'hierarchical', section_title=section_title
@@ -375,8 +394,8 @@ class LongContextEngine(BaseEngine):
             str: Processed response
         """
         # First pass: summarize chunks
-        chunks = self._create_chunks(context, self.context_limits['chunk_size'])
-        summaries = []
+        chunks = self._create_chunks(context, int(self.context_limits['chunk_size']))
+        summaries: List[str] = []
 
         for chunk in chunks:
             summary_prompt = f"Summarize this text focusing on key information:\n\n{chunk}"
@@ -438,8 +457,8 @@ class LongContextEngine(BaseEngine):
         Returns:
             str: Processed response
         """
-        chunks = self._create_overlapping_chunks(context, self.context_limits['chunk_size'], overlap)
-        chunk_results = []
+        chunks = self._create_overlapping_chunks(context, int(self.context_limits['chunk_size']), overlap)
+        chunk_results: List[str] = []
 
         for chunk in chunks:
             chunk_prompt = self._build_long_context_prompt(
@@ -463,7 +482,7 @@ class LongContextEngine(BaseEngine):
         Returns:
             List[str]: Text chunks
         """
-        chunks = []
+        chunks: List[str] = []
         for i in range(0, len(text), chunk_size):
             chunks.append(text[i:i + chunk_size])
         return chunks
@@ -479,7 +498,7 @@ class LongContextEngine(BaseEngine):
         Returns:
             List[str]: Overlapping text chunks
         """
-        chunks = []
+        chunks: List[str] = []
         step = chunk_size - overlap
 
         for i in range(0, len(text), step):
@@ -498,14 +517,14 @@ class LongContextEngine(BaseEngine):
         Returns:
             List[Tuple[str, str]]: List of (title, content) pairs
         """
-        sections = []
+        sections: List[Tuple[str, str]] = []
 
         # Look for markdown-style headers
         header_pattern = r'^(#{1,6})\s+(.+)$'
         lines = text.split('\n')
 
         current_section = None
-        current_content = []
+        current_content: List[str] = []
 
         for line in lines:
             header_match = re.match(header_pattern, line)
@@ -562,7 +581,7 @@ class LongContextEngine(BaseEngine):
                                    task_type: str,
                                    focus_query: Optional[str],
                                    strategy: str,
-                                   **context_info) -> str:
+                                   **context_info: Any) -> str:
         """Build prompt for long context processing.
 
         Args:
@@ -577,13 +596,13 @@ class LongContextEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
 
         # Add task instructions
-        instructions = []
+        instructions: List[str] = []
 
         if task_type in self.long_context_tasks:
             task_description = self.long_context_tasks[task_type]
@@ -623,15 +642,18 @@ class LongContextEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Base parameters for long context
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 1024),
-            'temperature': 0.6,
-            'do_sample': True,
-            'top_p': 0.9,
-            'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
+        # Get base parameters and then customize for long context
+        params = self._get_default_generation_params()
+        
+        # Override with user parameters
+        if 'max_tokens' in kwargs:
+            params['max_new_tokens'] = kwargs['max_tokens']
+        if 'temperature' in kwargs:
+            params['temperature'] = kwargs['temperature']
+        if 'top_p' in kwargs:
+            params['top_p'] = kwargs['top_p']
+        if 'repetition_penalty' in kwargs:
+            params['repetition_penalty'] = kwargs['repetition_penalty']
 
         # Adjust based on task type
         if task_type == 'comprehensive_summary':
@@ -653,35 +675,8 @@ class LongContextEngine(BaseEngine):
         Returns:
             str: Generated response
         """
-        # Tokenize input
-        inputs = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.context_limits['max_input_tokens']
-        )
-
-        # Move to device
-        if hasattr(self.model, 'device'):
-            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-        # Generate response
-        torch = self.model_loader._lazy_import_torch()
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=gen_params['max_new_tokens'],
-                temperature=gen_params['temperature'],
-                do_sample=gen_params['do_sample'],
-                top_p=gen_params['top_p'],
-                repetition_penalty=gen_params['repetition_penalty'],
-                pad_token_id=gen_params['pad_token_id'],
-                eos_token_id=self.tokenizer.eos_token_id
-            )
-
-        # Decode response
-        full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return self._extract_response(full_output, prompt)
+        # Use parent's generate method with the built prompt and parameters
+        return await super().generate(prompt, **gen_params)
 
     def _merge_chunk_results(self, results: List[str], task_type: str) -> str:
         """Merge results from multiple chunks.
@@ -720,8 +715,8 @@ class LongContextEngine(BaseEngine):
     def _merge_and_deduplicate_results(self, results: List[str], task_type: str) -> str:
         """Merge results and remove duplicates."""
         # Simple deduplication - in practice you'd want more sophisticated merging
-        unique_results = []
-        seen_content = set()
+        unique_results: List[str] = []
+        seen_content: set[str] = set()
 
         for result in results:
             result_key = result[:100]  # Use first 100 chars as key
@@ -754,7 +749,7 @@ class LongContextEngine(BaseEngine):
     async def _stream_chunked_processing(self, context: str, kwargs: Dict[str, Any]) -> AsyncGenerator[str, None]:
         """Stream processing of chunked context."""
         # Process chunks and yield results as they complete
-        chunks = self._create_chunks(context, self.context_limits['chunk_size'])
+        chunks = self._create_chunks(context, int(self.context_limits['chunk_size']))
         task_type = kwargs.get('task_type', 'comprehensive_summary')
 
         for i, chunk in enumerate(chunks):
@@ -866,6 +861,6 @@ class LongContextEngine(BaseEngine):
         """Get supported document types."""
         return list(self.document_types.keys())
 
-    def get_context_limits(self) -> Dict[str, int]:
+    def get_context_limits(self) -> Dict[str, Any]:
         """Get current context limits."""
         return self.context_limits.copy()
