@@ -1,7 +1,6 @@
-import asyncio
 import logging
 import re
-from typing import Dict, Any, Optional, AsyncGenerator, List, Tuple
+from typing import Dict, Any, Optional, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
 
@@ -11,7 +10,7 @@ logger = logging.getLogger(__name__)
 class MathematicalReasoningEngine(BaseEngine):
     def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
         super().__init__(config, model_loader, persona)
-        self.math_contexts = {
+        self.math_contexts: Dict[str, str] = {
             'algebra': 'algebraic equations and expressions',
             'calculus': 'differentiation, integration, and limits',
             'geometry': 'geometric shapes, proofs, and spatial reasoning',
@@ -21,6 +20,18 @@ class MathematicalReasoningEngine(BaseEngine):
             'number_theory': 'prime numbers, modular arithmetic, and number properties',
             'optimization': 'optimization problems and mathematical programming'
         }
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for mathematical reasoning."""
+        params = super()._get_default_generation_params()
+        # Override defaults for mathematical reasoning
+        params.update({
+            'max_new_tokens': 1024,     # Increased for detailed mathematical explanations
+            'temperature': 0.4,         # Lower temperature for more precise reasoning
+            'top_p': 0.85,             # Focused vocabulary for mathematical terms
+            'repetition_penalty': 1.1   # Prevent repetition in step-by-step solutions
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate mathematical solution and reasoning.
@@ -36,64 +47,56 @@ class MathematicalReasoningEngine(BaseEngine):
         Returns:
             str: Mathematical solution with reasoning
         """
-        # Parse mathematical context
-        math_context = kwargs.get('math_context', 'general')
-        show_work = kwargs.get('show_work', True)
-        verify_answer = kwargs.get('verify_answer', True)
-        use_latex = kwargs.get('use_latex', False)
+        if not self.is_model_loaded:
+            raise RuntimeError("Mathematical reasoning model not loaded")
 
-        # Build mathematical prompt
-        math_prompt = self._build_math_prompt(
-            prompt, math_context, show_work, verify_answer, use_latex
-        )
+        try:
+            # Parse mathematical context
+            math_context = kwargs.get('math_context', 'general')
+            show_work = kwargs.get('show_work', True)
+            verify_answer = kwargs.get('verify_answer', True)
+            use_latex = kwargs.get('use_latex', False)
 
-        # Get generation parameters
-        gen_params = self._get_math_generation_params(kwargs)
+            # Build mathematical prompt
+            math_prompt = self._build_math_prompt(
+                prompt, math_context, show_work, verify_answer, use_latex
+            )
 
-        # Use parent's generate method with the built prompt and parameters
-        response = await super().generate(math_prompt, **gen_params)
+            # Get generation parameters
+            gen_params = self._get_math_generation_params(kwargs)
 
-        # Post-process mathematical content
-        processed_solution = self._post_process_math_solution(
-            response, use_latex, kwargs
-        )
+            # Use parent's generate method with the built prompt and parameters
+            response = await super().generate(math_prompt, **gen_params)
 
-        logger.debug(f"Generated mathematical solution: {len(processed_solution)} chars")
-        return processed_solution
+            # Post-process mathematical content
+            processed_solution = self._post_process_math_solution(
+                response, use_latex, kwargs
+            )
 
-    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
-        """Generate streaming mathematical solution.
+            self.increment_generation_count()
 
-        Args:
-            prompt: Mathematical problem
-            **kwargs: Additional parameters
+            logger.debug(f"Generated mathematical solution: {len(processed_solution)} chars")
+            return processed_solution
 
-        Yields:
-            str: Solution chunks
-        """
-        # Parse mathematical context
-        math_context = kwargs.get('math_context', 'general')
-        show_work = kwargs.get('show_work', True)
-        verify_answer = kwargs.get('verify_answer', True)
-        use_latex = kwargs.get('use_latex', False)
-
-        # Build mathematical prompt
-        math_prompt = self._build_math_prompt(
-            prompt, math_context, show_work, verify_answer, use_latex
-        )
-
-        # Get generation parameters
-        gen_params = self._get_math_generation_params(kwargs)
-        
-        # Use parent's generate_stream method with the built prompt and parameters
-        async for chunk in super().generate_stream(math_prompt, **gen_params):
-            yield chunk
+        except Exception as e:
+            logger.error(f"Error generating mathematical solution: {e}")
+            raise
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for mathematical reasoning."""
-        if hasattr(self, 'persona_loader'):
-            return self.persona_loader.get_persona_for_category('mathematical_reasoning')
-        return None
+        if self.persona:
+            return self.persona
+        
+        # Default system prompt for mathematical reasoning
+        return """You are an expert mathematician and problem solver. You excel at:
+- Solving complex mathematical problems step-by-step
+- Providing clear explanations for mathematical concepts
+- Verifying solutions using multiple approaches
+- Formatting mathematical expressions clearly
+- Breaking down complex problems into manageable steps
+- Applying various mathematical techniques and theorems
+
+Always show your work, explain your reasoning, and verify your final answer when possible."""
 
     def _build_math_prompt(self,
                            problem: str,
@@ -115,7 +118,7 @@ class MathematicalReasoningEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
@@ -126,7 +129,7 @@ class MathematicalReasoningEngine(BaseEngine):
             prompt_parts.append(f"This is a {context_description} problem.")
 
         # Add instructions
-        instructions = []
+        instructions: List[str] = []
 
         if show_work:
             instructions.append("Show your work step-by-step")
@@ -159,25 +162,22 @@ class MathematicalReasoningEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Parameters optimized for mathematical reasoning
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 1024),  # Increased default
-            'temperature': 0.4,  # Moderate temperature for creative problem-solving
-            'do_sample': True,
-            'top_p': 0.85,
-            'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
+        # Get base parameters and then customize for mathematical reasoning
+        params = self._get_default_generation_params()
+        
+        # Override with user parameters
+        if 'max_tokens' in kwargs:
+            params['max_new_tokens'] = kwargs['max_tokens']
+        if 'temperature' in kwargs:
+            params['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
+        if 'top_p' in kwargs:
+            params['top_p'] = kwargs['top_p']
+        if 'repetition_penalty' in kwargs:
+            params['repetition_penalty'] = kwargs['repetition_penalty']
 
         # Adjust based on problem complexity
         if 'complex' in kwargs.get('math_context', '').lower():
             params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 2)
-
-        # Override with user parameters
-        if 'temperature' in kwargs:
-            params['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
-        if 'max_tokens' in kwargs:
-            params['max_new_tokens'] = min(2048, kwargs['max_tokens'])  # Allow up to 2048
 
         return params
 
@@ -288,7 +288,7 @@ class MathematicalReasoningEngine(BaseEngine):
             str: Well-structured solution
         """
         lines = solution.split('\n')
-        structured_lines = []
+        structured_lines: List[str] = []
 
         step_counter = 1
         in_steps = False
@@ -329,8 +329,6 @@ class MathematicalReasoningEngine(BaseEngine):
         """
         # This would integrate with symbolic math libraries in a full implementation
         # For now, it's a placeholder that uses the general generation method
-
-        prompt = f"Solve the equation {equation} for {variable}. Show all steps."
 
         return {
             'equation': equation,
