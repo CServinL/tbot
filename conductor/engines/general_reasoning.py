@@ -2,7 +2,6 @@ import logging
 from typing import Dict, Any, Optional, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
-from conductor.utils.persona_loader import PersonaLoader
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +11,6 @@ class GeneralReasoningEngine(BaseEngine):
     
     def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
         super().__init__(config, model_loader, persona)
-        self.persona_loader = PersonaLoader()
         self.reasoning_contexts = {
             'logical': 'logical deduction and inference',
             'analytical': 'analytical thinking and problem breakdown',
@@ -26,7 +24,9 @@ class GeneralReasoningEngine(BaseEngine):
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for general reasoning."""
-        return self.persona_loader.get_persona_for_category('general_reasoning')
+        if self.persona:
+            return self.persona
+        return "You are an analytical AI assistant specialized in logical reasoning and problem solving. Break down complex problems systematically, provide clear reasoning steps, and offer well-structured solutions."
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate reasoning-based response with enhanced prompt building."""

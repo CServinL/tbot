@@ -8,6 +8,8 @@ logger = logging.getLogger(__name__)
 
 
 class CodeGenerationEngine(BaseEngine):
+    """Code generation engine for creating complete programs, functions, and classes."""
+    
     def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
         super().__init__(config, model_loader, persona)
         self.code_templates = {
@@ -95,6 +97,8 @@ class CodeGenerationEngine(BaseEngine):
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for code generation."""
+        if self.persona:
+            return self.persona
         return "You are an expert code generator. Generate clean, efficient, and well-documented code following best practices for the specified programming language."
 
     def _build_code_generation_prompt(self,

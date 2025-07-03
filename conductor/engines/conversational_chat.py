@@ -1,8 +1,7 @@
 import logging
-from typing import Dict, Any, Optional, List, AsyncGenerator
+from typing import Dict, Any, Optional, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
-from conductor.utils.persona_loader import PersonaLoader
 
 logger = logging.getLogger(__name__)
 
@@ -12,13 +11,14 @@ class ConversationalChatEngine(BaseEngine):
     
     def __init__(self, config: Dict[str, Any], model_loader: ModelLoader, persona: str = ""):
         super().__init__(config, model_loader, persona)
-        self.persona_loader = PersonaLoader()
         self.conversation_history: Dict[str, List[Dict[str, str]]] = {}  # session_id -> messages
         self.max_history_length = 10  # Keep last 10 exchanges
 
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for conversational chat."""
-        return self.persona_loader.get_persona_for_category('conversational_chat')
+        if self.persona:
+            return self.persona
+        return "You are a helpful, conversational AI assistant. Engage in natural dialogue while being informative, friendly, and helpful. Maintain context from previous messages in the conversation."
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate conversational response with history context."""
@@ -34,31 +34,6 @@ class ConversationalChatEngine(BaseEngine):
         self._update_conversation_history(session_id, prompt, response)
         
         return response
-
-    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncGenerator[str, None]:
-        """Generate streaming conversational response with history context."""
-        session_id = kwargs.get('session_id', 'default')
-        
-        # Build conversation prompt with history
-        conversation_prompt = self._build_conversation_prompt(prompt, session_id)
-        
-        # For now, implement basic streaming by yielding the full response
-        # This will be improved when BaseEngine supports streaming
-        try:
-            response = await super().generate(conversation_prompt, **kwargs)
-            
-            # Update conversation history
-            self._update_conversation_history(session_id, prompt, response)
-            
-            # Yield response in chunks for streaming effect
-            chunk_size = 10
-            for i in range(0, len(response), chunk_size):
-                chunk = response[i:i + chunk_size]
-                yield chunk
-                
-        except Exception as e:
-            logger.error(f"Error in streaming generation: {e}")
-            yield f"Error: {str(e)}"
 
     def _build_conversation_prompt(self, user_message: str, session_id: str = 'default') -> str:
         """Build conversation prompt with history context."""

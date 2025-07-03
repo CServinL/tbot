@@ -38,8 +38,10 @@ class CodeCompletionEngine(BaseEngine):
         return params
 
     def get_system_prompt(self) -> Optional[str]:
-        """Code completion doesn't use system prompts."""
-        return None
+        """Get system prompt for code completion."""
+        if self.persona:
+            return self.persona
+        return "You are a code completion assistant. Provide accurate, contextually appropriate code completions based on the given code context."
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate code completion with enhanced context."""
