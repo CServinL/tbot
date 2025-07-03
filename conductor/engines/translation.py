@@ -11,7 +11,7 @@ class TranslationEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Common language codes for NLLB-200
-        self.language_codes = {
+        self.language_codes: Dict[str, str] = {
             'english': 'eng_Latn',
             'spanish': 'spa_Latn',
             'french': 'fra_Latn',
@@ -45,7 +45,19 @@ class TranslationEngine(BaseEngine):
         }
 
         # Reverse mapping for code to language name
-        self.code_to_language = {v: k for k, v in self.language_codes.items()}
+        self.code_to_language: Dict[str, str] = {v: k for k, v in self.language_codes.items()}
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for translation."""
+        params = super()._get_default_generation_params()
+        # Override defaults for translation
+        params.update({
+            'max_new_tokens': 512,  # Reasonable for most translations
+            'temperature': 0.3,     # Lower temperature for consistent translations
+            'top_p': 0.9,          # Slightly higher for language diversity
+            'repetition_penalty': 1.1  # Prevent repetitive translations
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate translation.
@@ -61,12 +73,6 @@ class TranslationEngine(BaseEngine):
         Returns:
             str: Translated text
         """
-        if not self.is_loaded():
-            raise RuntimeError("Translation model not loaded")
-
-        if not self.model or not self.tokenizer:
-            raise RuntimeError("Model or tokenizer not available")
-
         try:
             # Parse translation parameters
             source_lang = kwargs.get('source_lang', 'english')
@@ -81,70 +87,24 @@ class TranslationEngine(BaseEngine):
             if not source_code or not target_code:
                 raise ValueError(f"Unsupported language pair: {source_lang} -> {target_lang}")
 
-            # For NLLB models, we need to set the target language
-            if hasattr(self.tokenizer, 'src_lang'):
-                self.tokenizer.src_lang = source_code
-            if hasattr(self.tokenizer, 'tgt_lang'):
-                self.tokenizer.tgt_lang = target_code
+            # Set language codes for NLLB models
+            self._configure_translation_languages(source_code, target_code)
 
             # Build translation prompt
             translation_prompt = self._build_translation_prompt(
                 prompt, source_lang, target_lang, formal_register
             )
 
-            # Get generation parameters
+            # Get generation parameters optimized for translation
             gen_params = self._get_translation_params(kwargs)
 
-            # Tokenize input
-            inputs = self.tokenizer(
-                translation_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=1024
-            )
+            # Use parent's generate method with the built prompt and parameters
+            response = await super().generate(translation_prompt, **gen_params)
 
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            # Generate translation
-            import torch
-            with torch.no_grad():
-                # For NLLB models, we might need to use generate with forced_bos_token_id
-                if hasattr(self.tokenizer, 'lang_code_to_id') and target_code in self.tokenizer.lang_code_to_id:
-                    forced_bos_token_id = self.tokenizer.lang_code_to_id[target_code]
-                    outputs = self.model.generate(
-                        **inputs,
-                        max_new_tokens=gen_params['max_new_tokens'],
-                        temperature=gen_params['temperature'],
-                        do_sample=gen_params['do_sample'],
-                        top_p=gen_params['top_p'],
-                        forced_bos_token_id=forced_bos_token_id,
-                        pad_token_id=gen_params['pad_token_id'],
-                        eos_token_id=self.tokenizer.eos_token_id
-                    )
-                else:
-                    # Fallback for non-NLLB models
-                    outputs = self.model.generate(
-                        **inputs,
-                        max_new_tokens=gen_params['max_new_tokens'],
-                        temperature=gen_params['temperature'],
-                        do_sample=gen_params['do_sample'],
-                        top_p=gen_params['top_p'],
-                        pad_token_id=gen_params['pad_token_id'],
-                        eos_token_id=self.tokenizer.eos_token_id
-                    )
-
-            # Decode translation
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            translation = self._extract_translation(full_output, translation_prompt)
-
-            # Post-process translation
+            # Post-process the translation
             processed_translation = self._post_process_translation(
-                translation, preserve_formatting, kwargs
+                response, preserve_formatting, kwargs
             )
-
-            self.increment_generation_count()
 
             logger.debug(f"Generated translation: {source_lang} -> {target_lang}")
             return processed_translation
@@ -163,77 +123,38 @@ class TranslationEngine(BaseEngine):
         Yields:
             str: Translation chunks
         """
-        if not self.is_loaded():
-            raise RuntimeError("Translation model not loaded")
+        # Parse translation parameters
+        source_lang = kwargs.get('source_lang', 'english')
+        target_lang = kwargs.get('target_lang', 'spanish')
+        preserve_formatting = kwargs.get('preserve_formatting', True)
+        formal_register = kwargs.get('formal_register', False)
 
-        if not self.model or not self.tokenizer:
-            raise RuntimeError("Model or tokenizer not available")
+        # Convert language names to codes if needed
+        source_code = self._get_language_code(source_lang)
+        target_code = self._get_language_code(target_lang)
 
+        if not source_code or not target_code:
+            yield f"Error: Unsupported language pair: {source_lang} -> {target_lang}"
+            return
+
+        # Set language codes for NLLB models
+        self._configure_translation_languages(source_code, target_code)
+
+        # Build translation prompt
+        translation_prompt = self._build_translation_prompt(
+            prompt, source_lang, target_lang, formal_register
+        )
+
+        # Get generation parameters optimized for translation
+        gen_params = self._get_translation_params(kwargs)
+
+        # Since base class doesn't have generate_stream, use regular generate
         try:
-            from transformers.generation.streamers import TextIteratorStreamer
-            import torch
-            from threading import Thread
-
-            source_lang = kwargs.get('source_lang', 'english')
-            target_lang = kwargs.get('target_lang', 'spanish')
-
-            source_code = self._get_language_code(source_lang)
-            target_code = self._get_language_code(target_lang)
-
-            if hasattr(self.tokenizer, 'src_lang'):
-                self.tokenizer.src_lang = source_code
-            if hasattr(self.tokenizer, 'tgt_lang'):
-                self.tokenizer.tgt_lang = target_code
-
-            translation_prompt = self._build_translation_prompt(
-                prompt, source_lang, target_lang, kwargs.get('formal_register', False)
+            result = await super().generate(translation_prompt, **gen_params)
+            processed_result = self._post_process_translation(
+                result, preserve_formatting, kwargs
             )
-
-            gen_params = self._get_translation_params(kwargs)
-
-            inputs = self.tokenizer(
-                translation_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=1024
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            # Add forced_bos_token_id for NLLB if available
-            if hasattr(self.tokenizer, 'lang_code_to_id') and target_code in self.tokenizer.lang_code_to_id:
-                generation_kwargs['forced_bos_token_id'] = self.tokenizer.lang_code_to_id[target_code]
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
+            yield processed_result
         except Exception as e:
             logger.error(f"Error in streaming translation: {e}")
             yield f"Error: {str(e)}"
@@ -248,6 +169,22 @@ class TranslationEngine(BaseEngine):
         return ("You are a professional translator. Translate the text accurately "
                 "while preserving the meaning, tone, and style of the original. "
                 "Provide only the translation without additional explanations.")
+
+    def _configure_translation_languages(self, source_code: str, target_code: str) -> None:
+        """Configure tokenizer language codes for NLLB models.
+        
+        Args:
+            source_code: Source language code
+            target_code: Target language code
+        """
+        if self.tokenizer is None:
+            return
+            
+        # For NLLB models, we need to set the target language
+        if hasattr(self.tokenizer, 'src_lang'):
+            self.tokenizer.src_lang = source_code  # type: ignore
+        if hasattr(self.tokenizer, 'tgt_lang'):
+            self.tokenizer.tgt_lang = target_code  # type: ignore
 
     def _get_language_code(self, language: str) -> Optional[str]:
         """Get language code from language name or return if already a code.
@@ -290,14 +227,14 @@ class TranslationEngine(BaseEngine):
             return text
         else:
             # Build structured prompt for instruction-following models
-            prompt_parts = []
+            prompt_parts: List[str] = []
 
             if system_prompt:
                 prompt_parts.append(system_prompt)
 
             register_instruction = "formal" if formal_register else "natural"
 
-            instructions = [
+            instructions: List[str] = [
                 f"Translate the following text from {source_lang} to {target_lang}.",
                 f"Use {register_instruction} language register.",
                 "Preserve the meaning and tone of the original text.",
@@ -319,23 +256,21 @@ class TranslationEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Parameters optimized for translation
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 512),
-            'temperature': 0.3,  # Lower temperature for more consistent translations
-            'do_sample': True,
-            'top_p': 0.9,
-            'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
-
+        # Use base class parameter validation with translation-specific overrides
+        translation_kwargs = kwargs.copy()
+        
+        # Set default temperature for translation if not provided
+        if 'temperature' not in translation_kwargs:
+            translation_kwargs['temperature'] = 0.3  # Lower for consistent translations
+            
         # Adjust for different types of content
         if kwargs.get('creative_content', False):
-            params['temperature'] = 0.5  # Higher for creative content
+            translation_kwargs['temperature'] = 0.5  # Higher for creative content
         elif kwargs.get('technical_content', False):
-            params['temperature'] = 0.2  # Lower for technical accuracy
+            translation_kwargs['temperature'] = 0.2  # Lower for technical accuracy
 
-        return params
+        # Use base class validation which handles clamping and safety limits
+        return self._validate_generation_params(translation_kwargs)
 
     def _extract_translation(self, full_output: str, original_prompt: str) -> str:
         """Extract translation from full output.
@@ -351,9 +286,8 @@ class TranslationEngine(BaseEngine):
         if 'nllb' in self.technical_model_name.lower():
             return full_output.strip()
         else:
-            # For instruction-following models, extract after the prompt
-            translation = self._extract_response(full_output, original_prompt)
-            return translation
+            # For instruction-following models, use base class extraction
+            return self._extract_response(full_output, original_prompt)
 
     def _post_process_translation(self,
                                   translation: str,
@@ -395,7 +329,7 @@ class TranslationEngine(BaseEngine):
             str: Cleaned translation
         """
         # Remove common prefixes that models sometimes add
-        prefixes_to_remove = [
+        prefixes_to_remove: List[str] = [
             "Translation:",
             "Here's the translation:",
             "The translation is:",
@@ -470,7 +404,7 @@ class TranslationEngine(BaseEngine):
         Returns:
             List[Dict]: Common translation pairs
         """
-        common_pairs = [
+        common_pairs: List[Dict[str, str]] = [
             {'source': 'english', 'target': 'spanish'},
             {'source': 'english', 'target': 'french'},
             {'source': 'english', 'target': 'german'},
@@ -493,7 +427,7 @@ class TranslationEngine(BaseEngine):
             Dict containing language info
         """
         code = self._get_language_code(language)
-        name = self.code_to_language.get(code, language)
+        name = self.code_to_language.get(code or "", language)
 
         return {
             'name': name,
@@ -511,7 +445,7 @@ class TranslationEngine(BaseEngine):
         Returns:
             str: Language family
         """
-        families = {
+        families: Dict[str, str] = {
             'Latn': 'Latin script',
             'Cyrl': 'Cyrillic script',
             'Arab': 'Arabic script',
