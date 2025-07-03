@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Dict, Any, Optional, AsyncGenerator, List
+from typing import Dict, Any, Optional, List
 from conductor.engines.base_engine import BaseEngine
 from conductor.model_loader import ModelLoader
 
@@ -12,7 +12,7 @@ class QuestionAnsweringEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Question types and their characteristics
-        self.question_types = {
+        self.question_types: Dict[str, Dict[str, Any]] = {
             'factual': {
                 'description': 'Questions seeking specific facts or information',
                 'examples': ['What is the capital of France?', 'When was the Declaration of Independence signed?'],
@@ -52,7 +52,7 @@ class QuestionAnsweringEngine(BaseEngine):
         }
 
         # Answer formats
-        self.answer_formats = {
+        self.answer_formats: Dict[str, str] = {
             'direct': 'Provide a clear, direct answer',
             'detailed': 'Provide comprehensive explanation with details',
             'structured': 'Organize answer with clear sections',
@@ -60,6 +60,18 @@ class QuestionAnsweringEngine(BaseEngine):
             'pros_and_cons': 'List advantages and disadvantages',
             'step_by_step': 'Break down into sequential steps'
         }
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for question answering."""
+        params = super()._get_default_generation_params()
+        # Override defaults for question answering
+        params.update({
+            'max_new_tokens': 512,      # Moderate length for comprehensive answers
+            'temperature': 0.6,         # Balanced for informative but engaging answers
+            'top_p': 0.9,              # Diverse vocabulary for detailed explanations
+            'repetition_penalty': 1.1   # Prevent repetition in long answers
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Answer questions with appropriate depth and format.
@@ -105,39 +117,12 @@ class QuestionAnsweringEngine(BaseEngine):
             # Get generation parameters
             gen_params = self._get_qa_params(kwargs, question_type, answer_format)
 
-            # Tokenize input
-            inputs = self.tokenizer(
-                qa_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=2048
-            )
-
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            # Generate answer
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_params['max_new_tokens'],
-                    temperature=gen_params['temperature'],
-                    do_sample=gen_params['do_sample'],
-                    top_p=gen_params['top_p'],
-                    repetition_penalty=gen_params['repetition_penalty'],
-                    pad_token_id=gen_params['pad_token_id'],
-                    eos_token_id=self.tokenizer.eos_token_id
-                )
-
-            # Decode and process answer
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            answer_text = self._extract_response(full_output, qa_prompt)
+            # Use parent's generate method with the built prompt and parameters
+            response = await super().generate(qa_prompt, **gen_params)
 
             # Post-process answer
             processed_answer = self._post_process_answer(
-                answer_text, question_type, answer_format, question_analysis, kwargs
+                response, question_type, answer_format, question_analysis, kwargs
             )
 
             self.increment_generation_count()
@@ -149,87 +134,21 @@ class QuestionAnsweringEngine(BaseEngine):
             logger.error(f"Error answering question: {e}")
             raise
 
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
-        """Generate streaming question answer.
-
-        Args:
-            prompt: Question to answer
-            **kwargs: Additional parameters
-
-        Yields:
-            str: Answer chunks
-        """
-        if not self.is_model_loaded:
-            raise RuntimeError("Question answering model not loaded")
-
-        try:
-            from transformers import TextIteratorStreamer
-            import torch
-            from threading import Thread
-
-            question_analysis = self._analyze_question(prompt)
-            question_type = kwargs.get('question_type') or question_analysis.get('detected_type', 'explanatory')
-
-            qa_prompt = self._build_qa_prompt(
-                prompt,
-                kwargs.get('context'),
-                question_type,
-                kwargs.get('answer_format', 'detailed'),
-                kwargs.get('confidence_level', False),
-                kwargs.get('sources_requested', False),
-                kwargs.get('depth', 'medium'),
-                question_analysis
-            )
-
-            gen_params = self._get_qa_params(kwargs, question_type, kwargs.get('answer_format', 'detailed'))
-
-            inputs = self.tokenizer(
-                qa_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=2048
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'repetition_penalty': gen_params['repetition_penalty'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
-        except Exception as e:
-            logger.error(f"Error in streaming question answering: {e}")
-            yield f"Error: {str(e)}"
-
     def get_system_prompt(self) -> Optional[str]:
         """Get system prompt for question answering."""
-        return self.persona_loader.get_persona_for_category('question_answering')
+        if self.persona:
+            return self.persona
+        
+        # Default system prompt for question answering
+        return """You are an expert at answering questions across a wide range of topics. You excel at:
+- Providing accurate, well-researched answers
+- Adapting your response style to the type of question asked
+- Explaining complex concepts in clear, understandable terms
+- Acknowledging uncertainty when appropriate
+- Structuring answers logically and comprehensively
+- Distinguishing between facts, analysis, and opinions
+
+Always strive to be helpful, accurate, and appropriately detailed in your responses."""
 
     def _analyze_question(self, question: str) -> Dict[str, Any]:
         """Analyze question to determine type and approach.
@@ -240,7 +159,7 @@ class QuestionAnsweringEngine(BaseEngine):
         Returns:
             Dict containing question analysis
         """
-        analysis = {
+        analysis: Dict[str, Any] = {
             'detected_type': 'explanatory',
             'complexity': 'medium',
             'has_context': False,
@@ -318,7 +237,7 @@ class QuestionAnsweringEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
@@ -328,7 +247,7 @@ class QuestionAnsweringEngine(BaseEngine):
             prompt_parts.append(f"Context: {context}")
 
         # Add question type specific instructions
-        instructions = []
+        instructions: List[str] = []
 
         if question_type in self.question_types:
             type_info = self.question_types[question_type]
@@ -398,25 +317,28 @@ class QuestionAnsweringEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Base parameters for question answering
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 512),
-            'temperature': 0.6,  # Balanced for informative answers
-            'do_sample': True,
-            'top_p': 0.9,
-            'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
+        # Get base parameters and then customize for question answering
+        params = self._get_default_generation_params()
+        
+        # Override with user parameters
+        if 'max_tokens' in kwargs:
+            params['max_new_tokens'] = kwargs['max_tokens']
+        if 'temperature' in kwargs:
+            params['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
+        if 'top_p' in kwargs:
+            params['top_p'] = kwargs['top_p']
+        if 'repetition_penalty' in kwargs:
+            params['repetition_penalty'] = kwargs['repetition_penalty']
 
         # Adjust based on question type
         if question_type == 'factual':
             params['temperature'] = 0.4  # Lower for factual accuracy
         elif question_type == 'explanatory':
             params['temperature'] = 0.6
-            params['max_new_tokens'] = min(768, params['max_new_tokens'] * 1.5)
+            params['max_new_tokens'] = min(768, int(params['max_new_tokens'] * 1.5))
         elif question_type == 'analytical':
             params['temperature'] = 0.7  # Higher for analytical thinking
-            params['max_new_tokens'] = min(1024, params['max_new_tokens'] * 2)
+            params['max_new_tokens'] = min(1024, int(params['max_new_tokens'] * 2))
         elif question_type == 'opinion':
             params['temperature'] = 0.7
         elif question_type == 'procedural':
@@ -426,18 +348,14 @@ class QuestionAnsweringEngine(BaseEngine):
         if answer_format in ['bullet_points', 'structured', 'step_by_step']:
             params['temperature'] = 0.5  # More structured output
         elif answer_format == 'detailed':
-            params['max_new_tokens'] = min(1024, params['max_new_tokens'] * 1.5)
+            params['max_new_tokens'] = min(1024, int(params['max_new_tokens'] * 1.5))
 
         # Depth adjustments
         depth = kwargs.get('depth', 'medium')
         if depth == 'deep':
-            params['max_new_tokens'] = min(1024, params['max_new_tokens'] * 2)
+            params['max_new_tokens'] = min(1024, int(params['max_new_tokens'] * 2))
         elif depth == 'shallow':
-            params['max_new_tokens'] = min(256, params['max_new_tokens'] * 0.6)
-
-        # Override with user parameters
-        if 'temperature' in kwargs:
-            params['temperature'] = max(0.1, min(kwargs['temperature'], 1.0))
+            params['max_new_tokens'] = min(256, int(params['max_new_tokens'] * 0.6))
 
         return params
 
@@ -515,7 +433,7 @@ class QuestionAnsweringEngine(BaseEngine):
         """
         # Split into logical points and format as bullets
         sentences = re.split(r'[.!?]+', answer)
-        bullets = []
+        bullets: List[str] = []
 
         for sentence in sentences:
             sentence = sentence.strip()
@@ -538,7 +456,7 @@ class QuestionAnsweringEngine(BaseEngine):
         """
         # Add basic structure headers
         paragraphs = answer.split('\n\n')
-        structured_parts = []
+        structured_parts: List[str] = []
 
         for i, paragraph in enumerate(paragraphs):
             if paragraph.strip():
@@ -560,7 +478,7 @@ class QuestionAnsweringEngine(BaseEngine):
         """
         # Convert to numbered steps
         sentences = answer.split('. ')
-        steps = []
+        steps: List[str] = []
 
         for i, sentence in enumerate(sentences, 1):
             sentence = sentence.strip()
@@ -614,7 +532,7 @@ class QuestionAnsweringEngine(BaseEngine):
         confidence_note = f"\n\n*Confidence level: {confidence_level}*"
         return answer + confidence_note
 
-    async def answer_batch_questions(self, questions: List[str], **kwargs) -> List[str]:
+    async def answer_batch_questions(self, questions: List[str], **kwargs: Any) -> List[str]:
         """Answer multiple questions in batch.
 
         Args:
@@ -624,7 +542,7 @@ class QuestionAnsweringEngine(BaseEngine):
         Returns:
             List[str]: Answers to each question
         """
-        answers = []
+        answers: List[str] = []
         for question in questions:
             answer = await self.generate(question, **kwargs)
             answers.append(answer)
