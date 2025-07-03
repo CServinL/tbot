@@ -35,7 +35,8 @@ gpu = ["xformers"]
 [tool.poetry.scripts]
 conductor = "conductor.conductor:main_sync"
 diffusiond = "diffusiond.main:main"
-# tbot = "tbot.main:main"  # <-- leave commented until tested
+tbot = "tbot.main:main"  # HTTP client-based TBot
+tbot-servers = "tbot.server_manager:main"  # Server management utility
 
 [build-system]
 requires = ["poetry-core"]
