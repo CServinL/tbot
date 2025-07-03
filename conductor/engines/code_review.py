@@ -12,7 +12,7 @@ class CodeReviewEngine(BaseEngine):
         super().__init__(config, model_loader, persona)
 
         # Review types
-        self.review_types = {
+        self.review_types: Dict[str, str] = {
             'security_review': 'Focus on security vulnerabilities and best practices',
             'performance_review': 'Analyze performance bottlenecks and optimizations',
             'style_review': 'Check coding style and conventions',
@@ -26,7 +26,7 @@ class CodeReviewEngine(BaseEngine):
         }
 
         # Programming languages and their specific considerations
-        self.language_specifics = {
+        self.language_specifics: Dict[str, Dict[str, Any]] = {
             'python': {
                 'style_guide': 'PEP 8',
                 'common_issues': ['indentation', 'naming_conventions', 'imports'],
@@ -66,13 +66,25 @@ class CodeReviewEngine(BaseEngine):
         }
 
         # Severity levels for issues
-        self.severity_levels = {
+        self.severity_levels: Dict[str, str] = {
             'critical': 'Critical issues that must be fixed immediately',
             'high': 'High priority issues that should be addressed soon',
             'medium': 'Medium priority issues for consideration',
             'low': 'Low priority suggestions and improvements',
             'info': 'Informational notes and best practices'
         }
+
+    def _get_default_generation_params(self) -> Dict[str, Any]:
+        """Get default generation parameters optimized for code review."""
+        params = super()._get_default_generation_params()
+        # Override defaults for code review
+        params.update({
+            'max_new_tokens': 1024,     # Enough for detailed reviews
+            'temperature': 0.4,         # Lower temperature for precise analysis
+            'top_p': 0.85,             # Focused but not too narrow
+            'repetition_penalty': 1.1   # Prevent repetitive analysis
+        })
+        return params
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Perform code review and analysis.
@@ -91,12 +103,6 @@ class CodeReviewEngine(BaseEngine):
         Returns:
             str: Code review with findings and recommendations
         """
-        if not self.is_loaded():
-            raise RuntimeError("Code review model not loaded")
-
-        if not self.model or not self.tokenizer:
-            raise RuntimeError("Model or tokenizer not available")
-
         try:
             # Parse review parameters
             code_to_review = kwargs.get('code_to_review', prompt)
@@ -116,45 +122,16 @@ class CodeReviewEngine(BaseEngine):
                 include_suggestions, context, focus_areas, code_analysis
             )
 
-            # Get generation parameters
+            # Get generation parameters optimized for code review
             gen_params = self._get_review_params(kwargs, review_type, language)
 
-            # Tokenize input
-            inputs = self.tokenizer(
-                review_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=3072  # Longer context for code review
-            )
+            # Use parent's generate method with the built prompt and parameters
+            response = await super().generate(review_prompt, **gen_params)
 
-            # Move to device
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            # Generate review
-            import torch
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_params['max_new_tokens'],
-                    temperature=gen_params['temperature'],
-                    do_sample=gen_params['do_sample'],
-                    top_p=gen_params['top_p'],
-                    repetition_penalty=gen_params['repetition_penalty'],
-                    pad_token_id=gen_params['pad_token_id'],
-                    eos_token_id=self.tokenizer.eos_token_id
-                )
-
-            # Decode and process review
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            code_review = self._extract_response(full_output, review_prompt)
-
-            # Post-process review
+            # Post-process the review
             processed_review = self._post_process_code_review(
-                code_review, review_type, language, code_analysis, kwargs
+                response, review_type, language, code_analysis, kwargs
             )
-
-            self.increment_generation_count()
 
             logger.debug(f"Generated {review_type} code review for {language}: {len(processed_review)} chars")
             return processed_review
@@ -173,73 +150,34 @@ class CodeReviewEngine(BaseEngine):
         Yields:
             str: Code review chunks
         """
-        if not self.is_loaded():
-            raise RuntimeError("Code review model not loaded")
+        # Parse review parameters
+        code_to_review = kwargs.get('code_to_review', prompt)
+        language = kwargs.get('language', self._detect_language(code_to_review))
+        review_type = kwargs.get('review_type', 'comprehensive')
+        severity_filter = kwargs.get('severity_filter', 'low')
+        include_suggestions = kwargs.get('include_suggestions', True)
+        context = kwargs.get('context')
+        focus_areas = kwargs.get('focus_areas', [])
 
-        if not self.model or not self.tokenizer:
-            raise RuntimeError("Model or tokenizer not available")
+        # Analyze the code
+        code_analysis = self._analyze_code_structure(code_to_review, language)
 
+        # Build code review prompt
+        review_prompt = self._build_review_prompt(
+            code_to_review, language, review_type, severity_filter,
+            include_suggestions, context, focus_areas, code_analysis
+        )
+
+        # Get generation parameters optimized for code review
+        gen_params = self._get_review_params(kwargs, review_type, language)
+
+        # Since base class doesn't have generate_stream, use regular generate
         try:
-            from transformers.generation.streamers import TextIteratorStreamer
-            import torch
-            from threading import Thread
-
-            code_to_review = kwargs.get('code_to_review', prompt)
-            language = kwargs.get('language', self._detect_language(code_to_review))
-            review_type = kwargs.get('review_type', 'comprehensive')
-
-            code_analysis = self._analyze_code_structure(code_to_review, language)
-            review_prompt = self._build_review_prompt(
-                code_to_review, language, review_type,
-                kwargs.get('severity_filter', 'low'),
-                kwargs.get('include_suggestions', True),
-                kwargs.get('context'),
-                kwargs.get('focus_areas', []),
-                code_analysis
+            result = await super().generate(review_prompt, **gen_params)
+            processed_result = self._post_process_code_review(
+                result, review_type, language, code_analysis, kwargs
             )
-
-            gen_params = self._get_review_params(kwargs, review_type, language)
-
-            inputs = self.tokenizer(
-                review_prompt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=3072
-            )
-
-            if hasattr(self.model, 'device'):
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-
-            streamer = TextIteratorStreamer(
-                self.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            generation_kwargs = {
-                **inputs,
-                'max_new_tokens': gen_params['max_new_tokens'],
-                'temperature': gen_params['temperature'],
-                'do_sample': gen_params['do_sample'],
-                'top_p': gen_params['top_p'],
-                'repetition_penalty': gen_params['repetition_penalty'],
-                'pad_token_id': gen_params['pad_token_id'],
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'streamer': streamer
-            }
-
-            generation_thread = Thread(
-                target=self.model.generate,
-                kwargs=generation_kwargs
-            )
-            generation_thread.start()
-
-            for chunk in streamer:
-                yield chunk
-
-            generation_thread.join()
-            self.increment_generation_count()
-
+            yield processed_result
         except Exception as e:
             logger.error(f"Error in streaming code review: {e}")
             yield f"// Error: {str(e)}"
@@ -259,17 +197,17 @@ class CodeReviewEngine(BaseEngine):
         # Simple language detection based on patterns
         code_lower = code.lower()
 
-        if 'def ' in code or 'import ' in code or code.count('    ') > code.count('\t'):
+        if 'def ' in code_lower or 'import ' in code_lower or code_lower.count('    ') > code_lower.count('\t'):
             return 'python'
-        elif 'function ' in code or 'const ' in code or 'let ' in code:
+        elif 'function ' in code_lower or 'const ' in code_lower or 'let ' in code_lower:
             return 'javascript'
-        elif 'public class' in code or 'import java' in code:
+        elif 'public class' in code_lower or 'import java' in code_lower:
             return 'java'
-        elif '#include' in code or 'std::' in code:
+        elif '#include' in code_lower or 'std::' in code_lower:
             return 'cpp'
-        elif 'func ' in code or 'package ' in code:
+        elif 'func ' in code_lower or 'package ' in code_lower:
             return 'go'
-        elif 'fn ' in code or 'use std::' in code:
+        elif 'fn ' in code_lower or 'use std::' in code_lower:
             return 'rust'
         else:
             return 'unknown'
@@ -284,7 +222,7 @@ class CodeReviewEngine(BaseEngine):
         Returns:
             Dict containing code analysis
         """
-        analysis = {
+        analysis: Dict[str, Any] = {
             'line_count': len(code.split('\n')),
             'complexity_estimate': 'medium',
             'has_functions': False,
@@ -293,8 +231,6 @@ class CodeReviewEngine(BaseEngine):
             'has_imports': False,
             'indentation_style': 'spaces'
         }
-
-        lines = code.split('\n')
 
         # Detect functions/methods
         function_patterns = {
@@ -373,7 +309,7 @@ class CodeReviewEngine(BaseEngine):
         """
         system_prompt = self.get_system_prompt()
 
-        prompt_parts = []
+        prompt_parts: List[str] = []
 
         if system_prompt:
             prompt_parts.append(system_prompt)
@@ -383,7 +319,7 @@ class CodeReviewEngine(BaseEngine):
             prompt_parts.append(f"Context: {context}")
 
         # Add review instructions
-        instructions = []
+        instructions: List[str] = []
 
         # Review type specific instructions
         if review_type in self.review_types:
@@ -446,34 +382,28 @@ class CodeReviewEngine(BaseEngine):
         Returns:
             Dict[str, Any]: Generation parameters
         """
-        # Base parameters for code review
-        params = {
-            'max_new_tokens': kwargs.get('max_tokens', 1024),
-            'temperature': 0.4,  # Lower temperature for precise analysis
-            'do_sample': True,
-            'top_p': 0.85,
-            'repetition_penalty': 1.1,
-            'pad_token_id': self.tokenizer.eos_token_id if self.tokenizer else None
-        }
-
+        # Use base class parameter validation with review-specific overrides
+        review_kwargs = kwargs.copy()
+        
         # Adjust based on review type
         if review_type == 'comprehensive':
-            params['max_new_tokens'] = min(2048, params['max_new_tokens'] * 2)
+            review_kwargs['max_new_tokens'] = review_kwargs.get('max_new_tokens', 2048)
         elif review_type == 'security_review':
-            params['temperature'] = 0.3  # Very precise for security
-            params['max_new_tokens'] = min(1536, params['max_new_tokens'] * 1.5)
+            review_kwargs['temperature'] = 0.3  # Very precise for security
+            review_kwargs['max_new_tokens'] = review_kwargs.get('max_new_tokens', 1536)
         elif review_type == 'performance_review':
-            params['temperature'] = 0.5
+            review_kwargs['temperature'] = 0.5
         elif review_type == 'style_review':
-            params['temperature'] = 0.3
+            review_kwargs['temperature'] = 0.3
         elif review_type == 'architecture_review':
-            params['max_new_tokens'] = min(1536, params['max_new_tokens'] * 1.5)
+            review_kwargs['max_new_tokens'] = review_kwargs.get('max_new_tokens', 1536)
 
-        # Override with user parameters
+        # Override with user temperature if provided, but clamp for code review
         if 'temperature' in kwargs:
-            params['temperature'] = max(0.1, min(kwargs['temperature'], 0.8))
+            review_kwargs['temperature'] = max(0.1, min(kwargs['temperature'], 0.8))
 
-        return params
+        # Use base class validation which handles clamping and safety limits
+        return self._validate_generation_params(review_kwargs)
 
     def _post_process_code_review(self,
                                   review: str,
@@ -599,7 +529,7 @@ class CodeReviewEngine(BaseEngine):
 
     async def find_bugs(self,
                         code: str,
-                        language: str = None) -> str:
+                        language: Optional[str] = None) -> str:
         """Specialized bug detection in code.
 
         Args:
@@ -620,7 +550,7 @@ class CodeReviewEngine(BaseEngine):
 
     async def security_audit(self,
                              code: str,
-                             language: str = None) -> str:
+                             language: Optional[str] = None) -> str:
         """Perform security audit of code.
 
         Args:
