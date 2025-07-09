@@ -174,7 +174,7 @@ Report:"""
 
 Analysis:"""
             
-            print(f"� Performing {analysis_type} analysis...")
+            print(f"🔍 Performing {analysis_type} analysis...")
             analysis = self._process_with_ai(prompt, "general_reasoning")
             print(analysis)
             
