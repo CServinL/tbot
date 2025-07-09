@@ -1,0 +1,128 @@
+[tool.poetry]
+name = "tbot"
+version = "0.1.0"
+description = "A command-line multimodal AI chat assistant for text and image generation"
+authors = ["Christian Servin <https://github.com/CServinL>"]
+license = "GPL-3.0"
+readme = "README.md"
+packages = [
+    {include = "tbot"},
+    {include = "conductor"},
+    {include = "diffusiond"},
+]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+torch = "^2.7.0"
+transformers = "^4.53.0"
+diffusers = "^0.34.0"
+pillow = "^10.0.0"
+accelerate = "^0.28.0"
+safetensors = "^0.4.3"
+uvloop = "^0.21.0"
+bitsandbytes = "^0.46.0"
+
+# Optional GPU acceleration
+xformers = {version = "^0.0.31", optional = true}
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.0.0"
+pytest = "^7.0.0"
+
+[tool.poetry.extras]
+gpu = ["xformers"]
+
+[tool.poetry.scripts]
+conductor = "conductor.conductor:main_sync"
+diffusiond = "diffusiond.main:main"
+tbot = "tbot.main:main"  # HTTP client-based TBot
+tbot-servers = "tbot.server_manager:main"  # Server management utility
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+# External PyPI module dependencies tree (from pyproject.toml):
+
+# tbot (project root)
+# ├── torch (^2.7.0)
+# │   ├── typing-extensions
+# │   ├── filelock
+# │   ├── sympy
+# │   ├── networkx
+# │   ├── jinja2
+# │   ├── fsspec
+# │   └── numpy
+# ├── transformers (^4.53.0)
+# │   ├── tokenizers
+# │   ├── requests
+# │   │   ├── charset-normalizer
+# │   │   ├── idna
+# │   │   ├── urllib3
+# │   │   └── certifi
+# │   ├── tqdm
+# │   ├── regex
+# │   ├── numpy
+# │   ├── packaging
+# │   ├── filelock
+# │   ├── pyyaml
+# │   ├── safetensors
+# │   ├── huggingface-hub
+# │   │   ├── requests
+# │   │   ├── tqdm
+# │   │   ├── filelock
+# │   │   ├── packaging
+# │   │   └── typing-extensions
+# │   └── (see also torch, diffusers, accelerate)
+# ├── diffusers (^0.34.0)
+# │   ├── torch
+# │   ├── transformers
+# │   ├── numpy
+# │   ├── Pillow
+# │   ├── tqdm
+# │   ├── requests
+# │   ├── importlib-metadata
+# │   ├── packaging
+# │   ├── filelock
+# │   ├── huggingface-hub
+# │   └── (see also torch, transformers)
+# ├── pillow (^10.0.0)
+# │   ├── olefile
+# │   └── (standard library: zlib, struct, etc.)
+# ├── accelerate (^0.28.0)
+# │   ├── torch
+# │   ├── packaging
+# │   ├── psutil
+# │   ├── numpy
+# │   ├── pyyaml
+# │   ├── huggingface-hub
+# │   └── (see also torch)
+# ├── safetensors (^0.4.3)
+# │   └── numpy
+# ├── uvloop (^0.21.0)
+# │   └── (cython extension, no further deps)
+# ├── bitsandbytes (^0.46.0)
+# │   └── (cuda extension, no further deps)
+# ├── xformers (^0.0.31) [optional, for GPU]
+# │   └── torch
+# ├── black (^24.0.0) [dev]
+# │   ├── click
+# │   ├── tomli
+# │   ├── pathspec
+# │   ├── platformdirs
+# │   ├── packaging
+# │   └── mypy-extensions
+# ├── pytest (^7.0.0) [dev]
+# │   ├── attrs
+# │   ├── iniconfig
+# │   ├── pluggy
+# │   ├── packaging
+# │   ├── tomli
+# │   └── (standard library: importlib, sys, etc.)
+# └── poetry-core (build)
+#     ├── tomlkit
+#     └── (standard library: pathlib, sys, etc.)
