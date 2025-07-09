@@ -89,47 +89,7 @@ class StableDiffusionHTTPHandler(BaseHTTPRequestHandler, ComfyUIHTTPHandler):
 
         self.send_json_response(200, status)
 
-class StableDiffusionHTTPHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for the Stable Diffusion server"""
-
-    def __init__(self, sd_server, *args, **kwargs):
-        self.sd_server = sd_server
-        super().__init__(*args, **kwargs)
-
-    def log_message(self, format, *args):
-        """Override to use our logger"""
-        self.sd_server.logger.info(f"{self.address_string()} - {format % args}")
-
-    def do_GET(self):
-        """Handle GET requests"""
-        parsed_path = urlparse(self.path)
-        path = parsed_path.path
-
-        if path == '/health':
-            self.handle_health_check()
-        elif path == '/models':
-            self.handle_list_models()
-        elif path.startswith('/images/'):
-            filename = path.split('/')[-1]
-            self.serve_image(filename)
-        else:
-            self.send_error(404, "Not Found")
-
-    def do_POST(self):
-        """Handle POST requests"""
-        parsed_path = urlparse(self.path)
-        path = parsed_path.path
-
-        if path == '/generate':
-            self.handle_generate()
-        elif path == '/switch-model':
-            self.handle_switch_model()
-        elif path == '/clear-cache':
-            self.handle_clear_cache()
-        else:
-            self.send_error(404, "Not Found")
-
-    def do_OPTIONS(self):
+# The duplicate definition of StableDiffusionHTTPHandler has been removed to preserve ComfyUI route support.
         """Handle OPTIONS requests for CORS"""
         self.send_response(200)
         self.send_cors_headers()
